@@ -585,15 +585,15 @@ function renderGrid() {
         else icon = ASSETS.mountain;
 
         if (armies && armies[r][c] > 0 && !isMtn) {
-          // Cell has troops — draw icon small in top-right corner
-          const smallSize = Math.floor(cs * 0.35);
-          const pad = Math.max(2, Math.floor(cs * 0.05));
-          ctx.globalAlpha = 0.7;
+          // Cell has troops — draw icon in top-right corner
+          const smallSize = Math.floor(cs * 0.45);
+          const pad = Math.max(1, Math.floor(cs * 0.04));
+          ctx.globalAlpha = 0.75;
           ctx.drawImage(icon, x + cs - smallSize - pad, y + pad, smallSize, smallSize);
           ctx.globalAlpha = 1.0;
         } else {
           // Empty structure or mountain — draw icon centered and large
-          const iconSize = Math.floor(cs * 0.6);
+          const iconSize = Math.floor(cs * 0.75);
           const iconOff = Math.floor((cs - iconSize) / 2);
           ctx.drawImage(icon, x + iconOff, y + iconOff, iconSize, iconSize);
         }
