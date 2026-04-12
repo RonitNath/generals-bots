@@ -7,6 +7,8 @@ Examples:
 """
 
 import argparse
+import json
+import time
 
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -28,7 +30,7 @@ from generals.agents import (
     TurtleAgent,
     build_agent,
 )
-from generals.analysis import MatchLogger, analyze_map_fairness
+from generals.analysis import MatchLogger, Telemetry, analyze_map_fairness
 from generals.core.game import get_info
 
 
@@ -76,6 +78,9 @@ parser.add_argument("--min-fairness-score", type=float, default=0.72)
 parser.add_argument("--max-map-rerolls", type=int, default=8)
 parser.add_argument("--min-spawn-distance", type=int, default=10)
 parser.add_argument("--min-opening-area", type=int, default=20)
+parser.add_argument("--pool-size", type=int, default=32)
+parser.add_argument("--spawn-candidates", type=int, default=3)
+parser.add_argument("--terrain-candidates", type=int, default=4)
 
 choices = ["random", "expander", "material", "scout", "backdoor", "defense", "surround", "turtle", "punish", "swarm", "sniper", "greedy_city", "chaos"]
 parser.add_argument("--agent-a", type=str, default="material", choices=choices)
@@ -97,15 +102,22 @@ env = GeneralsEnv(
     grid_dims=(args.grid, args.grid),
     truncation=args.truncation,
     min_generals_distance=args.min_spawn_distance,
+    pool_size=args.pool_size,
+    spawn_candidate_count=args.spawn_candidates,
+    terrain_candidate_count=args.terrain_candidates,
 )
 key = jrandom.PRNGKey(args.seed)
+telemetry = Telemetry()
+match_start = time.perf_counter()
 selected_attempt = 0
 fairness_report = None
 map_accepted = False
 for attempt in range(args.max_map_rerolls + 1):
     key, reset_key = jrandom.split(key)
-    pool, state = env.reset(reset_key)
-    fairness_report = analyze_map_fairness(state)
+    attempt_start = time.perf_counter()
+    pool, state = telemetry.time_block("reset.env_reset", lambda: env.reset(reset_key))
+    telemetry.time_block("reset.block_state", lambda: None, ready_value=state.armies)
+    fairness_report = telemetry.time_block("reset.fairness_analysis", lambda: analyze_map_fairness(state))
     selected_attempt = attempt
     spawn_distance = fairness_report.get("spawn_distance")
     opening_area = fairness_report.get("opening_area_within_4", [0, 0])
@@ -114,6 +126,17 @@ for attempt in range(args.max_map_rerolls + 1):
         and not fairness_report["reject_map"]
         and (spawn_distance is None or spawn_distance >= args.min_spawn_distance)
         and min(opening_area) >= args.min_opening_area
+    )
+    telemetry.record("reset.attempt_total", time.perf_counter() - attempt_start)
+    telemetry.add_sample(
+        "reset_attempts",
+        {
+            "attempt": attempt,
+            "fairness_score": fairness_report["fairness_score"],
+            "spawn_distance": spawn_distance,
+            "opening_area": opening_area,
+            "accepted": map_accepted,
+        },
     )
     if map_accepted:
         break
@@ -124,21 +147,27 @@ logger = MatchLogger(
     enable_keyframes=not args.no_keyframes,
     keyframe_on={part.strip() for part in args.keyframe_on.split(",") if part.strip()},
 )
-logger.start_game(
-    state,
-    [agent_a.id, agent_b.id],
-    seed=args.seed,
-    env_config={
-        "grid": args.grid,
-        "truncation": args.truncation,
-        "min_fairness_score": args.min_fairness_score,
-        "max_map_rerolls": args.max_map_rerolls,
-        "min_spawn_distance": args.min_spawn_distance,
-        "min_opening_area": args.min_opening_area,
-        "generator_min_generals_distance": args.min_spawn_distance,
-        "map_reroll_attempts": selected_attempt,
-        "map_accepted": map_accepted,
-    },
+telemetry.time_block(
+    "logger.start_game",
+    lambda: logger.start_game(
+        state,
+        [agent_a.id, agent_b.id],
+        seed=args.seed,
+        env_config={
+            "grid": args.grid,
+            "truncation": args.truncation,
+            "min_fairness_score": args.min_fairness_score,
+            "max_map_rerolls": args.max_map_rerolls,
+            "min_spawn_distance": args.min_spawn_distance,
+            "min_opening_area": args.min_opening_area,
+            "generator_min_generals_distance": args.min_spawn_distance,
+            "pool_size": args.pool_size,
+            "spawn_candidate_count": args.spawn_candidates,
+            "terrain_candidate_count": args.terrain_candidates,
+            "map_reroll_attempts": selected_attempt,
+            "map_accepted": map_accepted,
+        },
+    ),
 )
 
 if args.gui:
@@ -150,42 +179,64 @@ terminated = truncated = False
 turn = 0
 
 while not (terminated or truncated):
+    turn_start = time.perf_counter()
     state_before = state
-    obs_a = get_observation(state_before, 0)
-    obs_b = get_observation(state_before, 1)
+    obs_a = telemetry.time_block("turn.observe_a", lambda: get_observation(state_before, 0))
+    obs_b = telemetry.time_block("turn.observe_b", lambda: get_observation(state_before, 1))
 
     key, k1, k2 = jrandom.split(key, 3)
-    actions = jnp.stack([
-        agent_a.act(obs_a, k1),
-        agent_b.act(obs_b, k2),
-    ])
+    action_a = telemetry.time_block("turn.act_a", lambda: agent_a.act(obs_a, k1))
+    action_b = telemetry.time_block("turn.act_b", lambda: agent_b.act(obs_b, k2))
+    actions = telemetry.time_block("turn.stack_actions", lambda: jnp.stack([action_a, action_b]))
 
-    info_before = get_info(state_before)
-    timestep, state = env.step(state_before, actions, pool)
-    logger.log_turn(
-        turn,
-        state_before=state_before,
-        info_before=info_before,
-        actions=actions,
-        state_after=state,
-        info_after=timestep.info,
-        agents=[agent_a, agent_b],
+    info_before = telemetry.time_block("turn.get_info_before", lambda: get_info(state_before))
+    timestep, state = telemetry.time_block("turn.env_step", lambda: env.step(state_before, actions, pool))
+    telemetry.time_block("turn.block_step", lambda: None, ready_value=state.armies)
+    telemetry.time_block(
+        "turn.logger_log_turn",
+        lambda: logger.log_turn(
+            turn,
+            state_before=state_before,
+            info_before=info_before,
+            actions=actions,
+            state_after=state,
+            info_after=timestep.info,
+            agents=[agent_a, agent_b],
+        ),
     )
 
     if gui is not None:
-        gui.update(state, timestep.info)
-        gui.tick(fps=args.fps)
+        telemetry.time_block("turn.gui_update", lambda: gui.update(state, timestep.info))
+        telemetry.time_block("turn.gui_tick", lambda: gui.tick(fps=args.fps))
 
     terminated = bool(timestep.terminated)
     truncated = bool(timestep.truncated)
+    turn_duration = time.perf_counter() - turn_start
+    telemetry.record("turn.total", turn_duration)
+    telemetry.add_sample(
+        "turn_samples",
+        {
+            "turn": turn,
+            "duration_sec": turn_duration,
+            "terminated": terminated,
+            "truncated": truncated,
+        },
+    )
     turn += 1
 
 winner = int(timestep.info.winner)
 winner_name = [agent_a.id, agent_b.id][winner] if winner >= 0 else None
-logger.finish_game(winner, winner_name, turn, final_state=state)
+telemetry.time_block("logger.finish_game", lambda: logger.finish_game(winner, winner_name, turn, final_state=state))
+telemetry.record("match.total", time.perf_counter() - match_start)
+telemetry.merge(logger.telemetry, prefix="logger")
 
 if gui is not None:
-    gui.close()
+    telemetry.time_block("gui.close", lambda: gui.close())
+
+summary_path = logger.summary_path
+summary = json.loads(summary_path.read_text())
+summary["runner_telemetry"] = telemetry.snapshot()
+summary_path.write_text(json.dumps(summary, indent=2))
 
 print(f"Logged match to {args.output}")
 print(

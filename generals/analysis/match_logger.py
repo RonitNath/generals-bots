@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ import numpy as np
 from generals.analysis.anomalies import AnomalyEngine
 from generals.analysis.keyframes import render_state_png, write_keyframe_json
 from generals.analysis.map_analysis import analyze_map_fairness
+from generals.analysis.telemetry import Telemetry
 from generals.agents.agent import Agent
 from generals.core.game import GameInfo, GameState, get_observation
 
@@ -105,21 +107,35 @@ class MatchLogger:
         self._event_count = 0
         self._general_revealed = [False, False]
         self._last_anomaly_keyframe_turn: int | None = None
+        self._slow_turns: list[dict[str, Any]] = []
+        self.telemetry = Telemetry()
 
     def start_game(self, state: GameState, agent_names: list[str], seed: int | None = None, env_config: dict[str, Any] | None = None):
+        start = time.perf_counter()
+        fairness = self.telemetry.time_block(
+            "start_game.map_fairness",
+            lambda: analyze_map_fairness(state),
+        )
         metadata = {
             "agents": agent_names,
             "seed": seed,
             "env_config": env_config or {},
             "grid_dims": list(np.array(state.armies).shape),
-            "map_fairness": analyze_map_fairness(state),
+            "map_fairness": fairness,
         }
-        self.metadata_path.write_text(json.dumps(metadata, indent=2, default=_json_default))
-        self.turns_path.write_text("")
-        self.events_path.write_text("")
+        self.telemetry.time_block(
+            "start_game.write_metadata",
+            lambda: self.metadata_path.write_text(json.dumps(metadata, indent=2, default=_json_default)),
+        )
+        self.telemetry.time_block("start_game.clear_turns_log", lambda: self.turns_path.write_text(""))
+        self.telemetry.time_block("start_game.clear_events_log", lambda: self.events_path.write_text(""))
         self._metadata_written = True
         if self.enable_keyframes and "game_start" in self.keyframe_on:
-            self._capture_keyframe(0, ["game_start"], state)
+            self.telemetry.time_block(
+                "start_game.keyframe",
+                lambda: self._capture_keyframe(0, ["game_start"], state),
+            )
+        self.telemetry.record("start_game.total", time.perf_counter() - start)
 
     def log_turn(
         self,
@@ -134,10 +150,21 @@ class MatchLogger:
         if not self._metadata_written:
             raise RuntimeError("start_game() must be called before log_turn().")
 
-        observations = [get_observation(state_before, 0), get_observation(state_before, 1)]
-        actions_np = np.array(actions)
-        action_kinds = [_classify_action(action, obs) for action, obs in zip(actions_np, observations, strict=True)]
-        debug_snapshots = [agent.get_debug_snapshot() for agent in agents]
+        turn_start = time.perf_counter()
+
+        observations = self.telemetry.time_block(
+            "log_turn.observations",
+            lambda: [get_observation(state_before, 0), get_observation(state_before, 1)],
+        )
+        actions_np = self.telemetry.time_block("log_turn.actions_to_numpy", lambda: np.array(actions))
+        action_kinds = self.telemetry.time_block(
+            "log_turn.classify_actions",
+            lambda: [_classify_action(action, obs) for action, obs in zip(actions_np, observations, strict=True)],
+        )
+        debug_snapshots = self.telemetry.time_block(
+            "log_turn.debug_snapshots",
+            lambda: [agent.get_debug_snapshot() for agent in agents],
+        )
 
         prev_arrays = {
             "land": np.array(info_before.land),
@@ -154,14 +181,17 @@ class MatchLogger:
             "generals": np.array(state_after.generals, dtype=bool),
         }
 
-        anomalies = self._anomaly_engine.detect(
-            turn,
-            observations,
-            actions_np,
-            action_kinds,
-            prev_arrays,
-            next_arrays,
-            debug_snapshots,
+        anomalies = self.telemetry.time_block(
+            "log_turn.detect_anomalies",
+            lambda: self._anomaly_engine.detect(
+                turn,
+                observations,
+                actions_np,
+                action_kinds,
+                prev_arrays,
+                next_arrays,
+                debug_snapshots,
+            ),
         )
         anomaly_score_this_turn = [0.0, 0.0]
         for anomaly in anomalies:
@@ -169,9 +199,12 @@ class MatchLogger:
             self._anomaly_scores[anomaly["player"]] += anomaly["score"]
             self._anomaly_counts[anomaly["type"]] += 1
 
-        events = self._derive_events(turn, state_before, state_after, info_before, info_after, observations, anomalies)
+        events = self.telemetry.time_block(
+            "log_turn.derive_events",
+            lambda: self._derive_events(turn, state_before, state_after, info_before, info_after, observations, anomalies),
+        )
         for event in events:
-            self._write_jsonl(self.events_path, event)
+            self.telemetry.time_block("log_turn.write_event", lambda payload=event: self._write_jsonl(self.events_path, payload))
             self._event_count += 1
 
         reasons: list[str] = []
@@ -186,7 +219,10 @@ class MatchLogger:
         if self._should_capture_anomaly_keyframe(turn, anomalies, anomaly_score_this_turn) and "anomaly" in self.keyframe_on:
             reasons.append("anomaly")
         if reasons and self.enable_keyframes:
-            self._capture_keyframe(turn, reasons, state_after)
+            self.telemetry.time_block(
+                "log_turn.capture_keyframe",
+                lambda: self._capture_keyframe(turn, reasons, state_after),
+            )
 
         turn_record = {
             "turn": turn,
@@ -221,15 +257,39 @@ class MatchLogger:
                 }
             )
 
-        self._write_jsonl(self.turns_path, turn_record)
+        self.telemetry.time_block("log_turn.write_turn", lambda: self._write_jsonl(self.turns_path, turn_record))
         worst_turn_score = sum(anomaly_score_this_turn)
         if worst_turn_score > 0:
             self._worst_turns.append({"turn": turn, "score": worst_turn_score, "anomalies": anomalies})
             self._worst_turns = sorted(self._worst_turns, key=lambda x: x["score"], reverse=True)[:10]
+        turn_duration = time.perf_counter() - turn_start
+        self.telemetry.record("log_turn.total", turn_duration)
+        self.telemetry.add_sample(
+            "recent_turn_samples",
+            {
+                "turn": turn,
+                "duration_sec": turn_duration,
+                "anomaly_score": sum(anomaly_score_this_turn),
+                "event_count": len(events),
+            },
+        )
+        self._slow_turns.append(
+            {
+                "turn": turn,
+                "duration_sec": turn_duration,
+                "anomaly_score": sum(anomaly_score_this_turn),
+                "event_count": len(events),
+            }
+        )
+        self._slow_turns = sorted(self._slow_turns, key=lambda item: item["duration_sec"], reverse=True)[:10]
 
     def finish_game(self, winner: int, winner_name: str | None, turns: int, final_state: GameState | None = None):
+        start = time.perf_counter()
         if final_state is not None and self.enable_keyframes and "game_end" in self.keyframe_on:
-            self._capture_keyframe(turns, ["game_end"], final_state)
+            self.telemetry.time_block(
+                "finish_game.keyframe",
+                lambda: self._capture_keyframe(turns, ["game_end"], final_state),
+            )
 
         summary = {
             "winner": winner,
@@ -238,10 +298,17 @@ class MatchLogger:
             "anomaly_scores": self._anomaly_scores,
             "anomaly_counts": dict(self._anomaly_counts),
             "worst_turns": self._worst_turns,
+            "slowest_turns": self._slow_turns,
             "keyframes": self._keyframe_count,
             "events": self._event_count,
+            "telemetry": self.telemetry.snapshot(),
         }
-        self.summary_path.write_text(json.dumps(summary, indent=2, default=_json_default))
+        self.telemetry.record("finish_game.total", time.perf_counter() - start)
+        summary["telemetry"] = self.telemetry.snapshot()
+        self.telemetry.time_block(
+            "finish_game.write_summary",
+            lambda: self.summary_path.write_text(json.dumps(summary, indent=2, default=_json_default)),
+        )
 
     def _derive_events(
         self,

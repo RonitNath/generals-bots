@@ -80,6 +80,8 @@ class GeneralsEnv:
         max_generals_distance: int | None = None,
         pool_size: int = 10_000,
         castle_val_range: tuple[int, int] = (40, 51),
+        spawn_candidate_count: int = 3,
+        terrain_candidate_count: int = 4,
         # Variable grid size params (alternative to grid_dims)
         min_grid_size: int | None = None,
         max_grid_size: int | None = None,
@@ -113,6 +115,8 @@ class GeneralsEnv:
         self.max_generals_distance = max_generals_distance
         self.pool_size = pool_size
         self.castle_val_range = castle_val_range
+        self.spawn_candidate_count = spawn_candidate_count
+        self.terrain_candidate_count = terrain_candidate_count
 
     def _make_single_state_fixed(self, key: jnp.ndarray, h: int, w: int) -> GameState:
         """Generate a single GameState for a specific (h, w) grid size."""
@@ -125,6 +129,8 @@ class GeneralsEnv:
             min_generals_distance=self.min_generals_distance,
             max_generals_distance=self.max_generals_distance,
             castle_val_range=self.castle_val_range,
+            spawn_candidate_count=self.spawn_candidate_count,
+            terrain_candidate_count=self.terrain_candidate_count,
         )
         return create_initial_state(grid.astype(jnp.int32))
 

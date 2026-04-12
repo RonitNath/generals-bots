@@ -5,7 +5,8 @@ import jax.numpy as jnp
 
 
 @partial(jax.jit, static_argnames=['grid_dims', 'pad_to', 'mountain_density_range', 'num_cities_range',
-                                    'min_generals_distance', 'max_generals_distance', 'castle_val_range'])
+                                    'min_generals_distance', 'max_generals_distance', 'castle_val_range',
+                                    'spawn_candidate_count', 'terrain_candidate_count'])
 def generate_grid(
     key: jax.random.PRNGKey,
     grid_dims: tuple[int, int] = (23, 23),
@@ -15,6 +16,8 @@ def generate_grid(
     min_generals_distance: int = 17,
     max_generals_distance: int | None = None,
     castle_val_range: tuple[int, int] = (40, 51),
+    spawn_candidate_count: int = 3,
+    terrain_candidate_count: int = 4,
 ) -> jnp.ndarray:
     """
     Generate a valid grid with stronger fairness and opening-space constraints.
@@ -68,9 +71,6 @@ def generate_grid(
     center_dist_candidate = jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))
     overall_candidate_grids = []
     overall_candidate_scores = []
-    spawn_candidate_count = 3
-    terrain_candidate_count = 4
-
     for spawn_idx in range(spawn_candidate_count):
         spawn_key_offset = 2 + spawn_idx * 4
         horizontal_split = jax.random.bernoulli(keys[spawn_key_offset])

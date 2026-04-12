@@ -33,6 +33,17 @@ def compare_counts(left: dict, right: dict) -> list[str]:
     return lines
 
 
+def compare_timings(left: dict, right: dict) -> list[str]:
+    keys = sorted(set(left) | set(right))
+    lines = []
+    for key in keys:
+        left_total = left.get(key, {}).get("total_sec", 0.0)
+        right_total = right.get(key, {}).get("total_sec", 0.0)
+        delta = right_total - left_total
+        lines.append(f"- {key}: {left_total:.4f}s -> {right_total:.4f}s ({delta:+.4f}s)")
+    return lines
+
+
 def compare_match_summaries(left: dict, right: dict) -> str:
     lines = ["**Match Comparison**"]
     for field in ["winner_name", "turns", "keyframes", "events"]:
@@ -46,6 +57,8 @@ def compare_match_summaries(left: dict, right: dict) -> str:
         lines.append(f"  player {idx}: {lv} -> {rv} ({rv - lv:+.1f})")
     lines.append("- anomaly_counts:")
     lines.extend(compare_counts(left.get("anomaly_counts", {}), right.get("anomaly_counts", {})))
+    lines.append("- telemetry:")
+    lines.extend(compare_timings(left.get("runner_telemetry", {}).get("timings", {}), right.get("runner_telemetry", {}).get("timings", {})))
     return "\n".join(lines)
 
 
@@ -54,6 +67,8 @@ def compare_tournament_summaries(left: dict, right: dict) -> str:
     lines.append(f"- matches: {left.get('matches')} -> {right.get('matches')}")
     lines.append("- global_anomaly_counts:")
     lines.extend(compare_counts(left.get("global_anomaly_counts", {}), right.get("global_anomaly_counts", {})))
+    lines.append("- telemetry:")
+    lines.extend(compare_timings(left.get("telemetry", {}), right.get("telemetry", {})))
 
     pair_keys = sorted(set(left.get("pairings", {})) | set(right.get("pairings", {})))
     for pair_key in pair_keys:
