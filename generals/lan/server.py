@@ -353,15 +353,25 @@ class LANServer:
 
                     print(f"\n--- Game {game_num}: {p0_name} (P0) vs {p1_name} (P1) ---")
 
-                    for i in range(2):
-                        send_msg(clients[assignment[i]], {
-                            "type": "game_start",
-                            "player_id": i,
-                            "player_name": [p0_name, p1_name][i],
-                            "opponent_name": [p1_name, p0_name][i],
-                            "grid_dims": grid_dims,
-                            "game_num": game_num,
-                        })
+                    try:
+                        for i in range(2):
+                            send_msg(clients[assignment[i]], {
+                                "type": "game_start",
+                                "player_id": i,
+                                "player_name": [p0_name, p1_name][i],
+                                "opponent_name": [p1_name, p0_name][i],
+                                "grid_dims": grid_dims,
+                                "game_num": game_num,
+                            })
+                    except (ConnectionError, OSError) as e:
+                        print(f"Client disconnected during game_start: {e}")
+                        # Close all clients and break to lobby
+                        for c in clients:
+                            try:
+                                c.close()
+                            except Exception:
+                                pass
+                        break  # back to lobby
 
                     if spectator:
                         spectator.game_start(state, [p0_name, p1_name], self.colors, game_num)
