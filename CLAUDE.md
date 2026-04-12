@@ -30,7 +30,10 @@ generals/
 ├── agents/         # Agent implementations
 │   ├── agent.py        # Abstract Agent base class: act(obs, key) → action
 │   ├── random_agent.py # Random valid moves
-│   └── expander_agent.py # Greedy territorial expansion
+│   ├── expander_agent.py # Greedy territorial expansion
+│   ├── strategic_agent.py # StrategicAgent base + heuristic subclasses
+│   ├── graph_search_agent.py # BFS/graph-based agent
+│   └── loading.py      # Dynamic agent loading from module:factory or file.py:factory
 ├── gui/            # PyGame visualization
 │   ├── gui.py          # Main GUI class
 │   ├── replay_gui.py   # Simple ReplayGUI wrapper for game visualization
@@ -39,8 +42,10 @@ generals/
 │   └── properties.py
 └── lan/            # LAN multiplayer (TCP, no extra deps)
     ├── protocol.py     # 4-byte length prefix + JSON framing, observation serialization
-    ├── server.py       # LANServer: hosts game engine + GUI, accepts 2 TCP clients
-    └── client.py       # LANClient: wraps any Agent, connects to server
+    ├── server.py       # LANServer: hosts game engine, accepts 2 TCP clients
+    ├── client.py       # LANClient: wraps any Agent, connects to server
+    ├── client_cli.py   # generals-client entry point
+    └── server_cli.py   # generals-server entry point
 ```
 
 ## Key Concepts

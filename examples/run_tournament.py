@@ -21,53 +21,9 @@ import jax.numpy as jnp
 import jax.random as jrandom
 
 from generals import GeneralsEnv, get_observation
-from generals.agents import (
-    BackdoorAgent,
-    ChaosAgent,
-    DefenseCounterAgent,
-    ExpanderAgent,
-    GreedyCityAgent,
-    MaterialAdvantageAgent,
-    PunishAgent,
-    RandomAgent,
-    ScoutPressureAgent,
-    SniperAgent,
-    SurroundPressureAgent,
-    SwarmAgent,
-    TurtleAgent,
-)
+from generals.agents import BUILTIN_AGENTS, build_builtin_agent
 from generals.analysis import MatchLogger, Telemetry, analyze_map_fairness
 from generals.core.game import get_info
-
-
-def build_builtin_agent(name: str, display_name: str | None = None):
-    if name == "random":
-        return RandomAgent(id=display_name or "Random")
-    if name == "expander":
-        return ExpanderAgent(id=display_name or "Expander")
-    if name == "material":
-        return MaterialAdvantageAgent(id=display_name or "Material")
-    if name == "scout":
-        return ScoutPressureAgent(id=display_name or "Scout")
-    if name == "backdoor":
-        return BackdoorAgent(id=display_name or "Backdoor")
-    if name == "defense":
-        return DefenseCounterAgent(id=display_name or "DefenseCounter")
-    if name == "surround":
-        return SurroundPressureAgent(id=display_name or "SurroundPressure")
-    if name == "turtle":
-        return TurtleAgent(id=display_name or "Turtle")
-    if name == "punish":
-        return PunishAgent(id=display_name or "Punish")
-    if name == "swarm":
-        return SwarmAgent(id=display_name or "Swarm")
-    if name == "sniper":
-        return SniperAgent(id=display_name or "Sniper")
-    if name == "greedy_city":
-        return GreedyCityAgent(id=display_name or "GreedyCity")
-    if name == "chaos":
-        return ChaosAgent(id=display_name or "Chaos")
-    raise ValueError(f"Unknown built-in agent: {name}")
 
 
 def _make_env(

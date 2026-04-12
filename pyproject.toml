@@ -20,6 +20,10 @@ dev = [
     "ruff>=0.6.0",
 ]
 
+[project.scripts]
+generals-client = "generals.lan.client_cli:main"
+generals-server = "generals.lan.server_cli:main"
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"

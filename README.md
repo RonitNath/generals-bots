@@ -339,6 +339,49 @@ The turn log is meant to catch agent issues such as:
 - attacking cities while behind on army
 - repeated direction flips / oscillation-like behavior
 
+## Creating Your Own Agent
+
+Install generals-bots as a dependency in your own project and use the
+`generals-client` CLI to connect your agent to a LAN server.
+
+**1. Set up your project:**
+
+```bash
+mkdir my-bot && cd my-bot
+uv init
+uv add generals-bots@git+https://github.com/turtlebasket/generals-bots
+```
+
+**2. Write your agent** (`my_agent.py`):
+
+```python
+import jax.numpy as jnp
+from generals.agents import Agent
+from generals.core.action import compute_valid_move_mask
+
+class MyAgent(Agent):
+    def act(self, observation, key):
+        mask = compute_valid_move_mask(
+            observation.armies, observation.owned_cells, observation.mountains,
+        )
+        # Your strategy here — see docs/agent-development.md for the full API
+        valid = jnp.argwhere(mask, size=mask.shape[0]*mask.shape[1]*4, fill_value=-1)
+        move = valid[0]
+        return jnp.array([0, move[0], move[1], move[2], 0], dtype=jnp.int32)
+```
+
+**3. Connect to a server:**
+
+```bash
+generals-client --agent-custom ./my_agent.py:MyAgent --host <server-ip> --name MyBot
+```
+
+The `--agent-custom` flag accepts either a file path (`./my_agent.py:MyAgent`)
+or a Python module path (`my_bot.agent:MyAgent`).
+
+See `docs/agent-development.md` for the full agent interface, observation fields,
+and built-in heuristic agents you can test against.
+
 ## Current State Of The Project
 
 This repo is in active transition from “RL simulator package” toward “shared LAN bot arena.”
@@ -349,16 +392,6 @@ That means:
 - LAN workflow is being made first-class,
 - spectator/UI work may evolve separately from the core server/client path,
 - and the recommended collaboration pattern is to keep platform work separate from agent-strategy work.
-
-## Recommended Collaboration Model
-
-If two people are building agents against this repo:
-
-1. Keep the shared platform code in the main repo.
-2. Let each person keep their own agent module or branch.
-3. Use `--agent-custom` so shared scripts stay unchanged.
-4. Run `uv run --extra dev pytest` before merging platform changes.
-5. Treat server/protocol changes as shared infrastructure and agent logic as independent work.
 
 ## License
 
