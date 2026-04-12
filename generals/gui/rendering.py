@@ -1,3 +1,4 @@
+import math
 from typing import TypeAlias
 
 import numpy as np
@@ -187,11 +188,14 @@ class Renderer:
         not_owned_map = np.logical_not(owned_map)
         invisible_map = np.logical_not(visible_map)
 
-        # Draw background of visible owned squares
+        # Draw background of visible owned squares with army-based brightness
+        armies = self.game.channels.armies
+        max_army = float((armies * visible_map).max()) if visible_map.any() else 1.0
         for agent in agents:
             ownership = self.game.channels.ownership[agent]
             visible_ownership = np.logical_and(ownership, visible_map)
-            self.draw_channel(visible_ownership, self.agent_data[agent]["color"])
+            base_color = self.agent_data[agent]["color"]
+            self.draw_channel_heatmap(visible_ownership, base_color, armies, max_army)
 
         # Draw visible generals
         visible_generals = np.logical_and(self.game.channels.generals, visible_map)
@@ -259,6 +263,25 @@ class Renderer:
             self.tiles[i][j].fill(color)
             pygame.draw.line(self.tiles[i][j], BLACK, (0, 0), (0, square_size), 1)
             pygame.draw.line(self.tiles[i][j], BLACK, (0, 0), (square_size, 0), 1)
+
+    def draw_channel_heatmap(self, channel: np.ndarray, base_color: Color, armies: np.ndarray, max_army: float):
+        """
+        Draw owned tiles with brightness modulated by army count (GitHub calendar style).
+        """
+        square_size = Dimension.SQUARE_SIZE.value
+        for i, j in self.channel_to_indices(channel):
+            t = self._army_brightness(int(armies[i, j]), max_army)
+            color = tuple(int(c * t) for c in base_color)
+            self.tiles[i][j].fill(color)
+            pygame.draw.line(self.tiles[i][j], BLACK, (0, 0), (0, square_size), 1)
+            pygame.draw.line(self.tiles[i][j], BLACK, (0, 0), (square_size, 0), 1)
+
+    @staticmethod
+    def _army_brightness(army_count: int, max_army: float) -> float:
+        """Map army count to [0.35, 1.0] brightness using log scale."""
+        if army_count <= 0:
+            return 0.35
+        return 0.35 + 0.65 * math.log1p(army_count) / math.log1p(max(max_army, 1))
 
     def draw_images(self, channel: np.ndarray, image: pygame.Surface):
         """
