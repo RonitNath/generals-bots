@@ -129,10 +129,8 @@ def generate_grid(
             key_offset = 14 + (spawn_idx * terrain_candidate_count + terrain_idx) * 8
 
             mountain_available = (candidate_grid == 0) & (~opening_buffer)
-            centrality = -(jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))).astype(jnp.float32)
-            symmetry_bias = -jnp.abs(manhattan_a - manhattan_b).astype(jnp.float32)
             spawn_distance_bias = jnp.minimum(manhattan_a, manhattan_b).astype(jnp.float32)
-            mountain_preference = 0.20 * centrality + 0.55 * symmetry_bias + 0.15 * spawn_distance_bias
+            mountain_preference = 0.1 * spawn_distance_bias
             mountain_indices = weighted_top_k_from_mask(
                 mountain_available,
                 mountain_preference,
