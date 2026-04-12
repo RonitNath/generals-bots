@@ -58,6 +58,7 @@ def _city_metrics(cities: np.ndarray, dist: np.ndarray) -> dict[str, Any]:
         "mean_distance": float(np.mean(valid)) if len(valid) else None,
         "cities_within_6": int(np.sum((dists >= 0) & (dists <= 6))),
         "cities_within_10": int(np.sum((dists >= 0) & (dists <= 10))),
+        "cities_within_15": int(np.sum((dists >= 0) & (dists <= 15))),
     }
 
 
@@ -90,8 +91,6 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
 
     city0 = _city_metrics(cities, dist0)
     city1 = _city_metrics(cities, dist1)
-    city0["cities_within_15"] = int(np.sum((dist0 >= 0) & cities & (dist0 <= 15)))
-    city1["cities_within_15"] = int(np.sum((dist1 >= 0) & cities & (dist1 <= 15)))
     opening_area_4 = [_reachable_within(dist0, 4), _reachable_within(dist1, 4)]
     opening_area_6 = [_reachable_within(dist0, 6), _reachable_within(dist1, 6)]
     spawn_distance = int(dist0[generals[1]]) if dist0[generals[1]] >= 0 else None
@@ -115,7 +114,7 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
         center_gap = abs(center_dist0 - center_dist1)
 
     warnings: list[str] = []
-    if territory_balance_ratio > 0.12:
+    if territory_balance_ratio > 0.10:
         warnings.append("territory reachability is noticeably asymmetric")
     if nearest_city_gap is not None and nearest_city_gap >= 3:
         warnings.append("nearest city access differs materially")
@@ -123,30 +122,30 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
         warnings.append("center access differs materially")
     if abs(city0["cities_within_10"] - city1["cities_within_10"]) >= 2:
         warnings.append("mid-range city density differs materially")
-    if chokepoint_ratio > 0.18:
+    if chokepoint_ratio > 0.14:
         warnings.append("early frontier width differs materially")
-    if spawn_distance is not None and spawn_distance < 8:
+    if spawn_distance is not None and spawn_distance < 10:
         warnings.append("generals spawn too close for realistic openings")
-    if min(opening_area_4) < 18:
+    if min(opening_area_4) < 20:
         warnings.append("opening space is cramped near at least one spawn")
     if abs(opening_area_4[0] - opening_area_4[1]) >= 5:
         warnings.append("opening space differs materially between spawns")
 
     fairness_score = 1.0
-    fairness_score -= min(territory_balance_ratio * 1.5, 0.35)
+    fairness_score -= min(territory_balance_ratio * 1.35, 0.32)
     fairness_score -= min((nearest_city_gap or 0) * 0.06, 0.18)
-    fairness_score -= min((center_gap or 0) * 0.04, 0.12)
-    fairness_score -= min(chokepoint_ratio * 0.8, 0.15)
-    if spawn_distance is not None and spawn_distance < 8:
-        fairness_score -= min((8 - spawn_distance) * 0.08, 0.32)
-    if min(opening_area_4) < 18:
-        fairness_score -= min((18 - min(opening_area_4)) * 0.03, 0.24)
+    fairness_score -= min((center_gap or 0) * 0.035, 0.12)
+    fairness_score -= min(chokepoint_ratio * 0.85, 0.16)
+    if spawn_distance is not None and spawn_distance < 10:
+        fairness_score -= min((10 - spawn_distance) * 0.08, 0.30)
+    if min(opening_area_4) < 20:
+        fairness_score -= min((20 - min(opening_area_4)) * 0.028, 0.24)
     fairness_score -= min(abs(opening_area_4[0] - opening_area_4[1]) * 0.02, 0.12)
     fairness_score = max(0.0, fairness_score)
-    reject_map = fairness_score < 0.65
-    if spawn_distance is not None and spawn_distance < 8:
+    reject_map = fairness_score < 0.72
+    if spawn_distance is not None and spawn_distance < 10:
         reject_map = True
-    if min(opening_area_4) < 18:
+    if min(opening_area_4) < 20:
         reject_map = True
 
     return {
@@ -163,6 +162,8 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
         "opening_area_within_6": opening_area_6,
         "frontier_cells_within_5": [frontier0, frontier1],
         "frontier_asymmetry_ratio": chokepoint_ratio,
+        "nearest_city_gap": nearest_city_gap,
+        "center_gap": center_gap,
         "city_access": [city0, city1],
         "fairness_score": fairness_score,
         "reject_map": reject_map,

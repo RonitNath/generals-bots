@@ -17,18 +17,15 @@ def generate_grid(
     castle_val_range: tuple[int, int] = (40, 51),
 ) -> jnp.ndarray:
     """
-    Generate grid using JAX-optimal algorithm with guaranteed validity.
-    
-    Unified generator that supports both square and non-square grids with
-    dynamic padding and configurable general distance constraints.
-    
-    Algorithm:
-    1. Place generals FIRST on empty grid (guaranteed valid distance)
-    2. Place mountains on empty cells
-    3. Place castles within BFS distance 6 of each general
-    4. Place remaining cities
-    5. Check connectivity, carve L-path if needed
-    6. Apply dynamic padding
+    Generate a valid grid with stronger fairness and opening-space constraints.
+
+    The generator still preserves asymmetry and randomness, but it now biases
+    maps toward:
+    1. interior, well-separated spawns
+    2. clear local openings around each general
+    3. terrain candidates with similar center/frontier access
+    4. city placement that avoids large early-access disparities
+    5. connectivity without relying solely on late-stage rerolls
     
     Args:
         key: JAX random key
@@ -43,7 +40,7 @@ def generate_grid(
     Returns:
         Grid is always valid (validity=True always)
     """
-    keys = jax.random.split(key, 12)
+    keys = jax.random.split(key, 120)
 
     h, w = grid_dims
     num_tiles = h * w
@@ -56,137 +53,236 @@ def generate_grid(
     max_mountains = int(mountain_density_range[1] * num_tiles)
     num_mountains = jax.random.randint(keys[1], (), min_mountains, max_mountains + 1)
 
-    # =================================================================
-    # Step 1: Place generals FIRST on empty grid
-    # Generate positions neutrally, then randomly assign to p0/p1
-    # =================================================================
-    grid = jnp.full(grid_dims, 0, dtype=jnp.int32)
+    base_grid = jnp.full(grid_dims, 0, dtype=jnp.int32)
 
-    # Place first general: only in positions where second can exist within distance constraints
-    first_valid = valid_base_a_mask(grid_dims, min_generals_distance, max_generals_distance)
-    pos_first = sample_from_mask(first_valid, keys[2])
-
-    # Place second general: constrained by distance from first
-    dist_from_first = manhattan_distance_from(pos_first, grid_dims)
-    second_valid = dist_from_first >= min_generals_distance
-    if max_generals_distance is not None:
-        second_valid = second_valid & (dist_from_first <= max_generals_distance)
-    pos_second = sample_from_mask(second_valid, keys[3])
-
-    # Randomly assign which position becomes p0 (Base A) vs p1 (Base B)
-    swap = jax.random.bernoulli(keys[11])
-    pos_a = jax.tree.map(lambda a, b: jnp.where(swap, b, a), pos_first, pos_second)
-    pos_b = jax.tree.map(lambda a, b: jnp.where(swap, a, b), pos_first, pos_second)
-
-    grid = grid.at[pos_a].set(1)
-    grid = grid.at[pos_b].set(2)
-    
-    # =================================================================
-    # Step 2: Place mountains (before castles, so BFS distance is accurate)
-    # =================================================================
-    mountain_available = (grid == 0)  # Any empty cell
-    flat_available = mountain_available.reshape(-1)
-    
-    # Use Gumbel-max + top_k for mountain placement
-    logits = jnp.where(flat_available, 0.0, -jnp.inf)
-    gumbel_noise = jax.random.gumbel(keys[8], shape=logits.shape)
-    scores = logits + gumbel_noise
-    
-    # Get indices for mountains (use static max and mask extras)
-    max_mountains = num_tiles // 4  # Upper bound for static shape
-    _, mountain_indices = jax.lax.top_k(scores, max_mountains)
-    
-    # Create flat grid, place mountains only up to num_mountains
-    flat_grid = grid.reshape(-1)
-    mountain_mask = jnp.arange(max_mountains) < num_mountains
-    
-    # Place mountains at selected indices
-    def place_mountain(flat_grid, idx_and_mask):
-        idx, should_place = idx_and_mask
-        return jnp.where(should_place, flat_grid.at[idx].set(-2), flat_grid), None
-    
-    flat_grid, _ = jax.lax.scan(place_mountain, flat_grid, (mountain_indices, mountain_mask))
-    grid = flat_grid.reshape(grid_dims)
-
-    # =================================================================
-    # Step 3: Place castles within BFS distance 6 of each general
-    # =================================================================
-    castle_val_a = jax.random.randint(keys[4], (), castle_val_range[0], castle_val_range[1])
-    castle_val_b = jax.random.randint(keys[5], (), castle_val_range[0], castle_val_range[1])
-
-    # BFS flood fill 6 steps from each general through non-mountain terrain
-    near_a = bfs_reachable_within_k(grid, pos_a, 6)
-    near_b = bfs_reachable_within_k(grid, pos_b, 6)
-
-    # Castle near A: must be empty and within BFS distance 6
-    castle_a_candidates = near_a & (grid == 0)
-    # Fallback: if no candidates, clear nearest mountain neighbor
-    has_candidates_a = jnp.any(castle_a_candidates)
-    fallback_a_mask = near_a & (grid == -2)
-    castle_a_mask = jnp.where(has_candidates_a, castle_a_candidates, fallback_a_mask)
-    pos_castle_a = sample_from_mask(castle_a_mask, keys[6])
-    grid = grid.at[pos_castle_a].set(castle_val_a)
-
-    # Castle near B: must be empty and within BFS distance 6 (not on first castle)
-    castle_b_candidates = near_b & (grid == 0)
-    has_candidates_b = jnp.any(castle_b_candidates)
-    fallback_b_mask = near_b & (grid == -2)
-    castle_b_mask = jnp.where(has_candidates_b, castle_b_candidates, fallback_b_mask)
-    pos_castle_b = sample_from_mask(castle_b_mask, keys[7])
-    grid = grid.at[pos_castle_b].set(castle_val_b)
-
-    # =================================================================
-    # Step 4: Place remaining cities (num_cities - 2, since 2 are castles)
-    # =================================================================
-    remaining_cities = num_cities - 2
-    city_available = (grid == 0)  # Any empty cell
-    flat_city_available = city_available.reshape(-1)
-    
-    city_logits = jnp.where(flat_city_available, 0.0, -jnp.inf)
-    city_gumbel = jax.random.gumbel(keys[9], shape=city_logits.shape)
-    city_scores = city_logits + city_gumbel
-    
-    # Cap max_extra_cities at the grid size to avoid top_k errors
-    max_extra_cities = min(20, flat_city_available.shape[0])
-    _, city_indices = jax.lax.top_k(city_scores, max_extra_cities)
-    
-    # Generate random city values
-    city_values = jax.random.randint(keys[10], (max_extra_cities,), castle_val_range[0], castle_val_range[1])
-    city_mask = jnp.arange(max_extra_cities) < remaining_cities
-    
-    flat_grid = grid.reshape(-1)
-    
-    def place_city(flat_grid, args):
-        idx, val, should_place = args
-        return jnp.where(should_place, flat_grid.at[idx].set(val), flat_grid), None
-    
-    flat_grid, _ = jax.lax.scan(place_city, flat_grid, (city_indices, city_values, city_mask))
-    grid = flat_grid.reshape(grid_dims)
-    
-    # =================================================================
-    # Step 5: Ensure connectivity (carve L-path if needed)
-    # =================================================================
-    connected = flood_fill_connected(grid, pos_a, pos_b)
-    grid = jax.lax.cond(
-        connected,
-        lambda g: g,  # Already connected, do nothing
-        lambda g: carve_l_path(g, pos_a, pos_b),  # Carve path
-        grid
+    # Step 1: sample several spawn pairs and several terrain layouts per pair.
+    margin = jnp.where(jnp.minimum(h, w) >= 12, 2, 1)
+    row_idx = jnp.arange(h)[:, None]
+    col_idx = jnp.arange(w)[None, :]
+    interior = (
+        (row_idx >= margin)
+        & (row_idx < h - margin)
+        & (col_idx >= margin)
+        & (col_idx < w - margin)
     )
+    center_dist_candidate = jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))
+    overall_candidate_grids = []
+    overall_candidate_scores = []
+    spawn_candidate_count = 3
+    terrain_candidate_count = 4
 
-    # Step 5b: Enforce max BFS distance (carve L-path if path is too long)
-    if max_generals_distance is not None:
-        dist = bfs_distance(grid, pos_a, pos_b)
-        grid = jax.lax.cond(
-            dist > max_generals_distance,
-            lambda g: carve_l_path(g, pos_a, pos_b),
-            lambda g: g,
-            grid
+    for spawn_idx in range(spawn_candidate_count):
+        spawn_key_offset = 2 + spawn_idx * 4
+        horizontal_split = jax.random.bernoulli(keys[spawn_key_offset])
+        left_band = interior & (col_idx <= (w // 2 - 1))
+        right_band = interior & (col_idx >= (w // 2))
+        top_band = interior & (row_idx <= (h // 2 - 1))
+        bottom_band = interior & (row_idx >= (h // 2))
+
+        spawn_a_band = jnp.where(horizontal_split, left_band, top_band)
+        spawn_b_band = jnp.where(horizontal_split, right_band, bottom_band)
+        spawn_a_band = jnp.where(jnp.any(spawn_a_band), spawn_a_band, interior)
+        spawn_b_band = jnp.where(jnp.any(spawn_b_band), spawn_b_band, interior)
+
+        spawn_a_pref = (
+            -0.8 * jnp.where(horizontal_split, jnp.abs(row_idx - (h // 2)), jnp.abs(col_idx - (w // 2))).astype(jnp.float32)
+            -0.2 * center_dist_candidate.astype(jnp.float32)
         )
-    
-    # =================================================================
-    # Step 6: Dynamic padding
-    # =================================================================
+        pos_first = sample_weighted_from_mask(spawn_a_band, spawn_a_pref, keys[spawn_key_offset + 1])
+        dist_from_first = manhattan_distance_from(pos_first, grid_dims)
+        separation_bias = jnp.where(horizontal_split, jnp.abs(row_idx - pos_first[0]), jnp.abs(col_idx - pos_first[1]))
+        second_valid = spawn_b_band & (dist_from_first >= min_generals_distance)
+        second_valid = second_valid & (separation_bias >= jnp.maximum(1, jnp.minimum(h, w) // 5))
+        if max_generals_distance is not None:
+            second_valid = second_valid & (dist_from_first <= max_generals_distance)
+        second_fallback = interior & (dist_from_first >= min_generals_distance)
+        if max_generals_distance is not None:
+            second_fallback = second_fallback & (dist_from_first <= max_generals_distance)
+        second_valid = jnp.where(jnp.any(second_valid), second_valid, second_fallback)
+        mirrored_row = (h - 1) - pos_first[0]
+        mirrored_col = (w - 1) - pos_first[1]
+        center_dist_first = jnp.abs(pos_first[0] - (h // 2)) + jnp.abs(pos_first[1] - (w // 2))
+        mirror_pref = jnp.where(
+            horizontal_split,
+            -jnp.abs(row_idx - mirrored_row).astype(jnp.float32),
+            -jnp.abs(col_idx - mirrored_col).astype(jnp.float32),
+        )
+        second_pref = (
+            0.25 * dist_from_first.astype(jnp.float32)
+            + 0.75 * mirror_pref
+            - 0.35 * jnp.abs(center_dist_candidate - center_dist_first).astype(jnp.float32)
+        )
+        pos_second = sample_weighted_from_mask(second_valid, second_pref, keys[spawn_key_offset + 2])
+
+        swap = jax.random.bernoulli(keys[spawn_key_offset + 3])
+        pos_a = jax.tree.map(lambda a, b: jnp.where(swap, b, a), pos_first, pos_second)
+        pos_b = jax.tree.map(lambda a, b: jnp.where(swap, a, b), pos_first, pos_second)
+
+        grid = base_grid.at[pos_a].set(1)
+        grid = grid.at[pos_b].set(2)
+        manhattan_a = manhattan_distance_from(pos_a, grid_dims)
+        manhattan_b = manhattan_distance_from(pos_b, grid_dims)
+        opening_buffer = (manhattan_a <= 2) | (manhattan_b <= 2)
+
+        for terrain_idx in range(terrain_candidate_count):
+            candidate_grid = grid
+            key_offset = 14 + (spawn_idx * terrain_candidate_count + terrain_idx) * 8
+
+            mountain_available = (candidate_grid == 0) & (~opening_buffer)
+            centrality = -(jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))).astype(jnp.float32)
+            symmetry_bias = -jnp.abs(manhattan_a - manhattan_b).astype(jnp.float32)
+            spawn_distance_bias = jnp.minimum(manhattan_a, manhattan_b).astype(jnp.float32)
+            mountain_preference = 0.20 * centrality + 0.55 * symmetry_bias + 0.15 * spawn_distance_bias
+            mountain_indices = weighted_top_k_from_mask(
+                mountain_available,
+                mountain_preference,
+                num_tiles // 4,
+                keys[key_offset],
+            )
+            flat_grid = candidate_grid.reshape(-1)
+            flat_grid = place_values_at_indices(
+                flat_grid,
+                mountain_indices,
+                jnp.full((num_tiles // 4,), -2, dtype=jnp.int32),
+                num_mountains,
+            )
+            candidate_grid = flat_grid.reshape(grid_dims)
+
+            # Keep the direct opening neighborhood clear even after mountain placement.
+            candidate_grid = jnp.where(opening_buffer & (candidate_grid == -2), 0, candidate_grid)
+
+            connected = flood_fill_connected(candidate_grid, pos_a, pos_b)
+            candidate_grid = jax.lax.cond(
+                connected,
+                lambda g: g,
+                lambda g: carve_l_path(g, pos_a, pos_b),
+                candidate_grid,
+            )
+            if max_generals_distance is not None:
+                dist = bfs_distance(candidate_grid, pos_a, pos_b)
+                candidate_grid = jax.lax.cond(
+                    dist > max_generals_distance,
+                    lambda g: carve_l_path(g, pos_a, pos_b),
+                    lambda g: g,
+                    candidate_grid,
+                )
+
+            terrain_passable = candidate_grid != -2
+            dist_a = bfs_distance_map(terrain_passable, pos_a)
+            dist_b = bfs_distance_map(terrain_passable, pos_b)
+
+            castle_val_a = jax.random.randint(keys[key_offset + 1], (), castle_val_range[0], castle_val_range[1])
+            castle_val_b = jax.random.randint(keys[key_offset + 2], (), castle_val_range[0], castle_val_range[1])
+            near_a_primary = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_a >= 4)
+                & (dist_a <= 6)
+                & ((dist_b < 0) | (dist_a + 1 < dist_b))
+            )
+            near_a_secondary = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_a >= 3)
+                & (dist_a <= 8)
+                & ((dist_b < 0) | (dist_a < dist_b))
+            )
+            near_a_fallback = (candidate_grid == 0) & (~opening_buffer) & (dist_a >= 3)
+            castle_a_mask = first_nonempty_mask(near_a_primary, near_a_secondary, near_a_fallback)
+            pos_castle_a = sample_from_mask(castle_a_mask, keys[key_offset + 3])
+            candidate_grid = candidate_grid.at[pos_castle_a].set(castle_val_a)
+
+            near_b_primary = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_b >= 4)
+                & (dist_b <= 6)
+                & ((dist_a < 0) | (dist_b + 1 < dist_a))
+            )
+            near_b_secondary = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_b >= 3)
+                & (dist_b <= 8)
+                & ((dist_a < 0) | (dist_b < dist_a))
+            )
+            near_b_fallback = (candidate_grid == 0) & (~opening_buffer) & (dist_b >= 3)
+            castle_b_mask = first_nonempty_mask(near_b_primary, near_b_secondary, near_b_fallback)
+            pos_castle_b = sample_from_mask(castle_b_mask, keys[key_offset + 4])
+            candidate_grid = candidate_grid.at[pos_castle_b].set(castle_val_b)
+
+            remaining_cities = jnp.maximum(0, num_cities - 2)
+            city_slots = min(12, num_tiles)
+            city_dist_target = 8.0
+
+            side_a_mask = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_a >= 5)
+                & (dist_a <= 11)
+                & ((dist_b < 0) | (dist_a + 1 < dist_b))
+            )
+            side_b_mask = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (dist_b >= 5)
+                & (dist_b <= 11)
+                & ((dist_a < 0) | (dist_b + 1 < dist_a))
+            )
+            contested_mask = (
+                (candidate_grid == 0)
+                & (~opening_buffer)
+                & (jnp.minimum(dist_a, dist_b) >= 6)
+                & (jnp.minimum(dist_a, dist_b) <= 12)
+                & (jnp.abs(dist_a - dist_b) <= 2)
+            )
+
+            side_a_pref = -jnp.abs(dist_a.astype(jnp.float32) - city_dist_target) - 0.4 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
+            side_b_pref = -jnp.abs(dist_b.astype(jnp.float32) - city_dist_target) - 0.4 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
+            contested_pref = -jnp.abs(jnp.minimum(dist_a, dist_b).astype(jnp.float32) - (city_dist_target + 1.0)) - 0.6 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
+
+            contested_target = jnp.minimum(2, remaining_cities // 3)
+            side_target = remaining_cities - contested_target
+            side_a_target = side_target // 2
+            side_b_target = side_target - side_a_target
+
+            side_a_indices = weighted_top_k_from_mask(side_a_mask, side_a_pref, city_slots, keys[key_offset + 5])
+            city_values_a = jax.random.randint(keys[key_offset + 6], (city_slots,), castle_val_range[0], castle_val_range[1])
+            flat_grid = candidate_grid.reshape(-1)
+            flat_grid = place_values_at_indices(flat_grid, side_a_indices, city_values_a, jnp.minimum(side_a_target, jnp.sum(side_a_mask)))
+            candidate_grid = flat_grid.reshape(grid_dims)
+
+            side_b_mask = side_b_mask & (candidate_grid == 0)
+            contested_mask = contested_mask & (candidate_grid == 0)
+            side_b_indices = weighted_top_k_from_mask(side_b_mask, side_b_pref, city_slots, keys[key_offset + 5] ^ jnp.uint32(13))
+            city_values_b = jax.random.randint(keys[key_offset + 6] ^ jnp.uint32(29), (city_slots,), castle_val_range[0], castle_val_range[1])
+            flat_grid = candidate_grid.reshape(-1)
+            flat_grid = place_values_at_indices(flat_grid, side_b_indices, city_values_b, jnp.minimum(side_b_target, jnp.sum(side_b_mask)))
+            candidate_grid = flat_grid.reshape(grid_dims)
+
+            contested_mask = contested_mask & (candidate_grid == 0)
+            contested_indices = weighted_top_k_from_mask(contested_mask, contested_pref, city_slots, keys[key_offset + 7])
+            city_values_c = jax.random.randint(keys[key_offset + 6] ^ jnp.uint32(43), (city_slots,), castle_val_range[0], castle_val_range[1])
+            flat_grid = candidate_grid.reshape(-1)
+            flat_grid = place_values_at_indices(flat_grid, contested_indices, city_values_c, jnp.minimum(contested_target, jnp.sum(contested_mask)))
+            candidate_grid = flat_grid.reshape(grid_dims)
+
+            connected = flood_fill_connected(candidate_grid, pos_a, pos_b)
+            candidate_grid = jax.lax.cond(
+                connected,
+                lambda g: g,
+                lambda g: carve_l_path(g, pos_a, pos_b),
+                candidate_grid,
+            )
+
+            candidate_score = score_layout(candidate_grid, pos_a, pos_b)
+            overall_candidate_grids.append(candidate_grid)
+            overall_candidate_scores.append(candidate_score)
+
+    score_stack = jnp.stack(overall_candidate_scores)
+    grid = jnp.stack(overall_candidate_grids)[jnp.argmax(score_stack)]
+
+    # Step 3: Dynamic padding.
     # Default padding: max dimension + 1 (for batching)
     if pad_to is None:
         target_size = max(h, w) + 1
@@ -228,6 +324,16 @@ def sample_from_mask(mask: jax.Array, key: jax.random.PRNGKey) -> tuple[int, int
     return jnp.unravel_index(idx, mask.shape)
 
 
+def sample_weighted_from_mask(mask: jax.Array, preference: jax.Array, key: jax.random.PRNGKey) -> tuple[int, int]:
+    """Sample one index from a mask using weighted Gumbel-max."""
+    flat_mask = mask.reshape(-1)
+    flat_pref = preference.reshape(-1)
+    logits = jnp.where(flat_mask, flat_pref, -jnp.inf)
+    gumbel_noise = jax.random.gumbel(key, shape=logits.shape)
+    idx = jnp.argmax(logits + gumbel_noise)
+    return jnp.unravel_index(idx, mask.shape)
+
+
 def sample_k_from_mask(mask: jax.Array, k: int, key: jax.random.PRNGKey) -> jax.Array:
     """
     Sample k indices from a boolean mask using Gumbel-max trick + top_k.
@@ -247,6 +353,116 @@ def sample_k_from_mask(mask: jax.Array, k: int, key: jax.random.PRNGKey) -> jax.
     scores = logits + gumbel_noise
     _, top_indices = jax.lax.top_k(scores, k)
     return top_indices
+
+
+def weighted_top_k_from_mask(mask: jax.Array, preference: jax.Array, k: int, key: jax.random.PRNGKey) -> jax.Array:
+    """Sample top-k positions from a mask using weighted Gumbel-max."""
+    flat_mask = mask.reshape(-1)
+    flat_pref = preference.reshape(-1)
+    logits = jnp.where(flat_mask, flat_pref, -jnp.inf)
+    gumbel_noise = jax.random.gumbel(key, shape=logits.shape)
+    _, top_indices = jax.lax.top_k(logits + gumbel_noise, k)
+    return top_indices
+
+
+def place_values_at_indices(flat_grid: jax.Array, indices: jax.Array, values: jax.Array, count: jax.Array) -> jax.Array:
+    """Place the first `count` values at the provided flat indices."""
+    limit = jnp.minimum(count, indices.shape[0])
+
+    def place_one(carry, args):
+        idx, value, i = args
+        carry = jax.lax.cond(
+            i < limit,
+            lambda arr: arr.at[idx].set(value),
+            lambda arr: arr,
+            carry,
+        )
+        return carry, None
+
+    flat_grid, _ = jax.lax.scan(place_one, flat_grid, (indices, values, jnp.arange(indices.shape[0])))
+    return flat_grid
+
+
+def first_nonempty_mask(*masks: jax.Array) -> jax.Array:
+    """Return the first mask with at least one true cell, else the last one."""
+    selected = masks[-1]
+    for mask in reversed(masks[:-1]):
+        selected = jnp.where(jnp.any(mask), mask, selected)
+    return selected
+
+
+def _expand_frontier(mask: jax.Array) -> jax.Array:
+    up = jnp.roll(mask, -1, axis=0).at[-1, :].set(False)
+    down = jnp.roll(mask, 1, axis=0).at[0, :].set(False)
+    left = jnp.roll(mask, -1, axis=1).at[:, -1].set(False)
+    right = jnp.roll(mask, 1, axis=1).at[:, 0].set(False)
+    return up | down | left | right
+
+
+def bfs_distance_map(passable: jax.Array, start_pos: tuple[int, int]) -> jax.Array:
+    """Return a full BFS distance map over passable cells."""
+    h, w = passable.shape
+    unreached = jnp.int32(h * w + 1)
+    frontier = jnp.zeros((h, w), dtype=jnp.bool_).at[start_pos].set(True)
+    seen = frontier
+    dist = jnp.full((h, w), unreached, dtype=jnp.int32).at[start_pos].set(0)
+
+    def body(step, state):
+        frontier, seen, dist = state
+        next_frontier = _expand_frontier(frontier) & passable & (~seen)
+        dist = jnp.where(next_frontier, step + 1, dist)
+        seen = seen | next_frontier
+        return next_frontier, seen, dist
+
+    frontier, seen, dist = jax.lax.fori_loop(0, h * w - 1, body, (frontier, seen, dist))
+    del frontier, seen
+    return jnp.where(dist == unreached, -1, dist)
+
+
+def score_layout(grid: jax.Array, pos_a: tuple[int, int], pos_b: tuple[int, int]) -> jax.Array:
+    """
+    Score a layout for fairness/opening realism.
+
+    This mirrors the diagnostic model in map_analysis closely enough that
+    generation and evaluation stay on the same policy.
+    """
+    passable = grid != -2
+    dist_a = bfs_distance_map(passable, pos_a)
+    dist_b = bfs_distance_map(passable, pos_b)
+
+    reachable_a = dist_a >= 0
+    reachable_b = dist_b >= 0
+    jointly_reachable = reachable_a & reachable_b
+    closer_a = jointly_reachable & (dist_a < dist_b)
+    closer_b = jointly_reachable & (dist_b < dist_a)
+    territory_balance_ratio = jnp.abs(jnp.sum(closer_a) - jnp.sum(closer_b)) / jnp.maximum(jnp.sum(jointly_reachable), 1)
+
+    center = (grid.shape[0] // 2, grid.shape[1] // 2)
+    center_gap = jnp.abs(dist_a[center] - dist_b[center])
+
+    opening_a = jnp.sum((dist_a >= 0) & (dist_a <= 4))
+    opening_b = jnp.sum((dist_b >= 0) & (dist_b <= 4))
+    frontier_a = jnp.sum((dist_a >= 0) & (dist_a <= 6))
+    frontier_b = jnp.sum((dist_b >= 0) & (dist_b <= 6))
+    frontier_ratio = jnp.abs(frontier_a - frontier_b) / jnp.maximum(frontier_a + frontier_b, 1)
+
+    cities = grid > 2
+    city_dists_a = jnp.where(cities, dist_a, jnp.int32(grid.shape[0] * grid.shape[1] + 1))
+    city_dists_b = jnp.where(cities, dist_b, jnp.int32(grid.shape[0] * grid.shape[1] + 1))
+    nearest_city_a = jnp.min(city_dists_a)
+    nearest_city_b = jnp.min(city_dists_b)
+    city_gap = jnp.abs(nearest_city_a - nearest_city_b)
+
+    spawn_distance = dist_a[pos_b]
+    score = jnp.float32(1.0)
+    score -= jnp.minimum(territory_balance_ratio * 1.35, 0.32)
+    score -= jnp.minimum(frontier_ratio * 0.85, 0.16)
+    score -= jnp.minimum(jnp.abs(opening_a - opening_b) * 0.018, 0.12)
+    score -= jnp.minimum(jnp.maximum(0, 20 - jnp.minimum(opening_a, opening_b)) * 0.028, 0.24)
+    score -= jnp.minimum(jnp.maximum(0, 10 - spawn_distance) * 0.08, 0.30)
+    score -= jnp.minimum(city_gap * 0.055, 0.16)
+    score -= jnp.minimum(center_gap * 0.035, 0.12)
+    return jnp.maximum(score, 0.0)
 
 
 def manhattan_distance_from(pos: tuple[int, int], grid_shape: tuple[int, int]) -> jax.Array:

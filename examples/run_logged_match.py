@@ -14,12 +14,18 @@ import jax.random as jrandom
 from generals import GeneralsEnv, get_observation
 from generals.agents import (
     BackdoorAgent,
+    ChaosAgent,
     DefenseCounterAgent,
     ExpanderAgent,
+    GreedyCityAgent,
     MaterialAdvantageAgent,
+    PunishAgent,
     RandomAgent,
     ScoutPressureAgent,
+    SniperAgent,
     SurroundPressureAgent,
+    SwarmAgent,
+    TurtleAgent,
     build_agent,
 )
 from generals.analysis import MatchLogger, analyze_map_fairness
@@ -41,6 +47,18 @@ def build_builtin_agent(name: str, display_name: str | None):
         return DefenseCounterAgent(id=display_name or "DefenseCounter")
     if name == "surround":
         return SurroundPressureAgent(id=display_name or "SurroundPressure")
+    if name == "turtle":
+        return TurtleAgent(id=display_name or "Turtle")
+    if name == "punish":
+        return PunishAgent(id=display_name or "Punish")
+    if name == "swarm":
+        return SwarmAgent(id=display_name or "Swarm")
+    if name == "sniper":
+        return SniperAgent(id=display_name or "Sniper")
+    if name == "greedy_city":
+        return GreedyCityAgent(id=display_name or "GreedyCity")
+    if name == "chaos":
+        return ChaosAgent(id=display_name or "Chaos")
     raise ValueError(f"Unknown built-in agent: {name}")
 
 
@@ -54,12 +72,12 @@ parser.add_argument("--output", type=str, default="logs/latest-match")
 parser.add_argument("--keyframe-every", type=int, default=25)
 parser.add_argument("--no-keyframes", action="store_true")
 parser.add_argument("--keyframe-on", type=str, default="game_start,periodic,city,general,land_swing,anomaly,game_end")
-parser.add_argument("--min-fairness-score", type=float, default=0.65)
-parser.add_argument("--max-map-rerolls", type=int, default=20)
-parser.add_argument("--min-spawn-distance", type=int, default=8)
-parser.add_argument("--min-opening-area", type=int, default=18)
+parser.add_argument("--min-fairness-score", type=float, default=0.72)
+parser.add_argument("--max-map-rerolls", type=int, default=8)
+parser.add_argument("--min-spawn-distance", type=int, default=10)
+parser.add_argument("--min-opening-area", type=int, default=20)
 
-choices = ["random", "expander", "material", "scout", "backdoor", "defense", "surround"]
+choices = ["random", "expander", "material", "scout", "backdoor", "defense", "surround", "turtle", "punish", "swarm", "sniper", "greedy_city", "chaos"]
 parser.add_argument("--agent-a", type=str, default="material", choices=choices)
 parser.add_argument("--agent-b", type=str, default="backdoor", choices=choices)
 parser.add_argument("--agent-a-custom", type=str, default=None)

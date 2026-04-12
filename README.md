@@ -37,6 +37,8 @@ Important entry points:
 - `examples/lan_client.py`
 - `examples/custom_agent.py`
 - `examples/run_logged_match.py`
+- `examples/run_tournament.py`
+- `examples/compare_results.py`
 - `examples/view_keyframe.py`
 
 Documentation:
@@ -46,6 +48,7 @@ Documentation:
 - [docs/strategy-notes.md](docs/strategy-notes.md)
 - [docs/match-analysis.md](docs/match-analysis.md)
 - [docs/map-diagnostics.md](docs/map-diagnostics.md)
+- [docs/ffa-plan.md](docs/ffa-plan.md)
 
 ## Installation
 
@@ -214,6 +217,12 @@ The repo also includes a few stateful rule-based agents intended to be more inte
 - `MaterialAdvantageAgent`: prioritizes city capture, favorable trades, and land grabs timed before income turns
 - `ScoutPressureAgent`: scouts aggressively into fog early, then pressures the most likely enemy region
 - `BackdoorAgent`: prefers deep incursions and isolated captures inside enemy territory
+- `TurtleAgent`: city-first defensive shell
+- `PunishAgent`: attacks exposed cities and overextended frontier tiles
+- `SwarmAgent`: spreads wide and creates many attack lanes
+- `SniperAgent`: concentrates armies and drives toward enemy-general lines
+- `GreedyCityAgent`: overvalues economy and is useful as a punishable sparring partner
+- `ChaosAgent`: fog-heavy opportunist for more varied matches
 
 These are inspired by the strategy themes highlighted in the paper:
 - material advantage and reward shaping around land / army / castles
