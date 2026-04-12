@@ -434,6 +434,11 @@ let colors = [[224, 72, 72], [72, 136, 224]];
 
 function rgb(c) { return `rgb(${c[0]},${c[1]},${c[2]})`; }
 function rgba(c, a) { return `rgba(${c[0]},${c[1]},${c[2]},${a})`; }
+function rgbDim(c, t) { return `rgb(${Math.round(c[0]*t)},${Math.round(c[1]*t)},${Math.round(c[2]*t)})`; }
+function armyBrightness(count, maxArmy) {
+  if (count <= 0) return 0.35;
+  return 0.35 + 0.65 * Math.log1p(count) / Math.log1p(Math.max(maxArmy, 1));
+}
 
 // --- WebSocket ---
 function connect() {
@@ -669,6 +674,14 @@ function renderGrid() {
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  // Compute max army for heatmap brightness scaling
+  let maxArmy = 1;
+  if (armies) {
+    for (let r = 0; r < H; r++)
+      for (let c = 0; c < W; c++)
+        if (armies[r][c] > maxArmy) maxArmy = armies[r][c];
+  }
+
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
       const x = c * cs;
@@ -683,7 +696,8 @@ function renderGrid() {
       if (isMtn) {
         ctx.fillStyle = '#3a3d48';
       } else if (owner >= 0) {
-        ctx.fillStyle = rgb(colors[owner]);
+        const t = armies ? armyBrightness(armies[r][c], maxArmy) : 1.0;
+        ctx.fillStyle = rgbDim(colors[owner], t);
       } else if (isCity && isNeutral) {
         ctx.fillStyle = '#6a6e78';
       } else {
