@@ -56,15 +56,9 @@ def generate_grid(
     max_mountains = int(mountain_density_range[1] * num_tiles)
     num_mountains = jax.random.randint(keys[1], (), min_mountains, max_mountains + 1)
 
-    # Clamp min_generals_distance to be feasible for the grid size.
-    # From an interior cell, max Manhattan distance to any corner is roughly h+w-4.
-    # Cap at 2/3 of grid diagonal to guarantee valid spawn pairs exist.
-    max_feasible = (h + w) * 2 // 3
-    min_generals_distance = min(min_generals_distance, max_feasible)
-
     base_grid = jnp.full(grid_dims, 0, dtype=jnp.int32)
 
-    # Step 1: sample several spawn pairs and several terrain layouts per pair.
+    # Step 1: sample spawn pairs and terrain layouts.
     margin = jnp.where(jnp.minimum(h, w) >= 12, 2, 1)
     row_idx = jnp.arange(h)[:, None]
     col_idx = jnp.arange(w)[None, :]
@@ -74,51 +68,27 @@ def generate_grid(
         & (col_idx >= margin)
         & (col_idx < w - margin)
     )
-    center_dist_candidate = jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))
+    center_dist = jnp.abs(row_idx - (h // 2)) + jnp.abs(col_idx - (w // 2))
     overall_candidate_grids = []
     overall_candidate_scores = []
     for spawn_idx in range(spawn_candidate_count):
         spawn_key_offset = 2 + spawn_idx * 4
-        horizontal_split = jax.random.bernoulli(keys[spawn_key_offset])
-        left_band = interior & (col_idx <= (w // 2 - 1))
-        right_band = interior & (col_idx >= (w // 2))
-        top_band = interior & (row_idx <= (h // 2 - 1))
-        bottom_band = interior & (row_idx >= (h // 2))
 
-        spawn_a_band = jnp.where(horizontal_split, left_band, top_band)
-        spawn_b_band = jnp.where(horizontal_split, right_band, bottom_band)
-        spawn_a_band = jnp.where(jnp.any(spawn_a_band), spawn_a_band, interior)
-        spawn_b_band = jnp.where(jnp.any(spawn_b_band), spawn_b_band, interior)
+        # First spawn: prefer away from center, random within interior.
+        # Gumbel noise (scale ~1) provides randomness; center_dist (scale ~h)
+        # ensures spawns land in the outer ring, not dead center.
+        spawn_a_pref = center_dist.astype(jnp.float32)
+        pos_first = sample_weighted_from_mask(interior, spawn_a_pref, keys[spawn_key_offset])
 
-        # Light preference: avoid edges but don't force center. Gumbel noise dominates.
-        spawn_a_pref = -0.15 * center_dist_candidate.astype(jnp.float32)
-        pos_first = sample_weighted_from_mask(spawn_a_band, spawn_a_pref, keys[spawn_key_offset + 1])
+        # Second spawn: prefer far from first AND far from center.
         dist_from_first = manhattan_distance_from(pos_first, grid_dims)
-        separation_bias = jnp.where(horizontal_split, jnp.abs(row_idx - pos_first[0]), jnp.abs(col_idx - pos_first[1]))
-        second_valid = spawn_b_band & (dist_from_first >= min_generals_distance)
-        second_valid = second_valid & (separation_bias >= jnp.maximum(1, jnp.minimum(h, w) // 5))
-        if max_generals_distance is not None:
-            second_valid = second_valid & (dist_from_first <= max_generals_distance)
-        second_fallback = interior & (dist_from_first >= min_generals_distance)
-        if max_generals_distance is not None:
-            second_fallback = second_fallback & (dist_from_first <= max_generals_distance)
-        second_valid = jnp.where(jnp.any(second_valid), second_valid, second_fallback)
-        mirrored_row = (h - 1) - pos_first[0]
-        mirrored_col = (w - 1) - pos_first[1]
-        center_dist_first = jnp.abs(pos_first[0] - (h // 2)) + jnp.abs(pos_first[1] - (w // 2))
-        mirror_pref = jnp.where(
-            horizontal_split,
-            -jnp.abs(row_idx - mirrored_row).astype(jnp.float32),
-            -jnp.abs(col_idx - mirrored_col).astype(jnp.float32),
-        )
         second_pref = (
-            0.25 * dist_from_first.astype(jnp.float32)
-            + 0.75 * mirror_pref
-            - 0.35 * jnp.abs(center_dist_candidate - center_dist_first).astype(jnp.float32)
+            dist_from_first.astype(jnp.float32)
+            + 0.5 * center_dist.astype(jnp.float32)
         )
-        pos_second = sample_weighted_from_mask(second_valid, second_pref, keys[spawn_key_offset + 2])
+        pos_second = sample_weighted_from_mask(interior, second_pref, keys[spawn_key_offset + 1])
 
-        swap = jax.random.bernoulli(keys[spawn_key_offset + 3])
+        swap = jax.random.bernoulli(keys[spawn_key_offset + 2])
         pos_a = jax.tree.map(lambda a, b: jnp.where(swap, b, a), pos_first, pos_second)
         pos_b = jax.tree.map(lambda a, b: jnp.where(swap, a, b), pos_first, pos_second)
 
