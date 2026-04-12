@@ -35,6 +35,7 @@ env = GeneralsEnv(
     truncation=args.truncation,
     min_generals_distance=args.min_distance,
     max_generals_distance=args.max_distance,
+    pool_size=1,  # LAN plays one game at a time; skip RL's 10K-map pool
 )
 server = LANServer(
     env,

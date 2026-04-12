@@ -338,6 +338,7 @@ class LANServer:
                                                     else (0.18, 0.26)),
                             min_generals_distance=self.env.min_generals_distance,
                             max_generals_distance=self.env.max_generals_distance,
+                            pool_size=self.env.pool_size,
                         )
                         print(f"  >> Env rebuilt with truncation={self._next_truncation}")
 
