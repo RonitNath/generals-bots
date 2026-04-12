@@ -25,9 +25,16 @@ parser.add_argument("--fps", type=int, default=6)
 parser.add_argument("--games", type=int, default=None, help="Number of games (default: infinite)")
 parser.add_argument("--spectator-port", type=int, default=8080, help="HTTP/WebSocket port for spectator UI")
 parser.add_argument("--no-spectator", action="store_true", help="Disable web spectator UI")
+parser.add_argument("--min-distance", type=int, default=20, help="Min Manhattan distance between generals (default: 20 = opposite sides)")
+parser.add_argument("--max-distance", type=int, default=None, help="Max Manhattan distance between generals")
 args = parser.parse_args()
 
-env = GeneralsEnv(grid_dims=(args.grid, args.grid), truncation=args.truncation)
+env = GeneralsEnv(
+    grid_dims=(args.grid, args.grid),
+    truncation=args.truncation,
+    min_generals_distance=args.min_distance,
+    max_generals_distance=args.max_distance,
+)
 server = LANServer(
     env,
     host=args.host,
