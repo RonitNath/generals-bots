@@ -15,7 +15,8 @@ from typing import Any
 
 import numpy as np
 import websockets
-from websockets.http11 import Request, Response
+import websockets.asyncio.server
+from websockets.http11 import Response
 
 from generals.core.game import GameState, GameInfo
 
@@ -80,18 +81,21 @@ class SpectatorBroadcast:
         self._loop.run_forever()
 
     async def _start_server(self):
-        self._server = await websockets.serve(
+        self._server = await websockets.asyncio.server.serve(
             self._ws_handler,
             self._host,
             self._port,
             process_request=self._http_handler,
         )
 
-    async def _http_handler(self, connection: websockets.ServerConnection, request: Request) -> Response | None:
-        """Serve HTML for non-WebSocket requests."""
+    def _http_handler(self, connection, request):
+        """Serve HTML for non-WebSocket requests, pass through WebSocket upgrades."""
         if request.headers.get("Upgrade", "").lower() == "websocket":
-            return None  # let websockets handle it
-        return Response(200, "OK", websockets.Headers({"Content-Type": "text/html; charset=utf-8"}), self._html)
+            return None
+        return Response(200, "OK", websockets.Headers({
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": str(len(self._html)),
+        }), self._html)
 
     async def _ws_handler(self, ws: websockets.ServerConnection):
         self._clients.add(ws)
