@@ -44,6 +44,9 @@ Commands:
   fps <N>          Set game speed (ticks/sec), e.g. 'fps 20'
   truncation <N>   Set max turns for next game, e.g. 'truncation 300'
   end              Force-end the current game as a draw
+  kick 1           Kick player 1 (returns to lobby for replacement)
+  kick 2           Kick player 2
+  kick all         Kick both players (full lobby reset)
   help             Show this message
 """.strip()
 
@@ -83,6 +86,7 @@ class LANServer:
         # Mutable settings changed via CLI commands
         self._next_truncation = env.truncation
         self._force_end = False
+        self._kick: list[int] = []  # indices into clients[] to kick
         self._cmd_queue: queue.Queue[str] = queue.Queue()
 
     def _start_cli(self):
@@ -135,6 +139,23 @@ class LANServer:
                 self._force_end = True
                 print("  >> Force-ending current game")
 
+            elif verb == "kick" and len(parts) >= 2:
+                target = parts[1].lower()
+                if target == "1":
+                    self._kick = [0]
+                    self._force_end = True
+                    print("  >> Kicking player 1")
+                elif target == "2":
+                    self._kick = [1]
+                    self._force_end = True
+                    print("  >> Kicking player 2")
+                elif target == "all":
+                    self._kick = [0, 1]
+                    self._force_end = True
+                    print("  >> Kicking all players")
+                else:
+                    print("  >> Usage: kick 1|2|all")
+
             elif verb == "help":
                 print(_HELP_TEXT)
 
@@ -177,168 +198,189 @@ class LANServer:
         self._start_cli()
 
         server_ip = self._get_server_ip()
-
-        if spectator:
-            spectator.set_lobby([], server_ip)
-            spectator.settings(self.fps, self._next_truncation)
-
-        # Accept two players
-        clients, agent_ids = self._accept_players(srv, spectator, server_ip)
-
         key = jrandom.PRNGKey(seed)
         game_num = 0
-        assignment = [0, 1]
-        match_score: Counter[str] = Counter()
-        draws = 0
 
         try:
-            while num_games is None or game_num < num_games:
-                game_num += 1
-
-                # Apply truncation changes between games
-                if self._next_truncation != self.env.truncation:
-                    self.env = GeneralsEnv(
-                        grid_dims=self.env._fixed_dims,
-                        truncation=self._next_truncation,
-                        mountain_density_range=(self.env.mountain_density_range
-                                                if hasattr(self.env, 'mountain_density_range')
-                                                else (0.18, 0.26)),
-                        min_generals_distance=self.env.min_generals_distance,
-                        max_generals_distance=self.env.max_generals_distance,
-                    )
-                    print(f"  >> Env rebuilt with truncation={self._next_truncation}")
-
-                self._force_end = False
-
-                key, reset_key = jrandom.split(key)
-                pool, state = self.env.reset(reset_key)
-
-                p0_name = agent_ids[assignment[0]]
-                p1_name = agent_ids[assignment[1]]
-                grid_dims = list(state.armies.shape)
-
-                print(f"\n--- Game {game_num}: {p0_name} (P0) vs {p1_name} (P1) ---")
-
-                # Send game_start to each client
-                for i in range(2):
-                    send_msg(clients[assignment[i]], {
-                        "type": "game_start",
-                        "player_id": i,
-                        "player_name": [p0_name, p1_name][i],
-                        "opponent_name": [p1_name, p0_name][i],
-                        "grid_dims": grid_dims,
-                        "game_num": game_num,
-                    })
-
+            # Outer loop: lobby → games → kick → lobby
+            while True:
                 if spectator:
-                    spectator.game_start(state, [p0_name, p1_name], self.colors, game_num)
+                    spectator.set_lobby([], server_ip)
+                    spectator.settings(self.fps, self._next_truncation)
 
-                # Game loop
-                terminated = truncated = False
-                turn = 0
+                clients, agent_ids = self._accept_players(srv, spectator, server_ip)
 
-                while not (terminated or truncated):
-                    tick_start = time.monotonic()
+                assignment = [0, 1]
+                match_score: Counter[str] = Counter()
+                draws = 0
 
-                    # Process CLI commands
-                    self._process_commands(spectator)
-                    if self._force_end:
-                        print(f"  >> Game {game_num} force-ended at turn {turn}")
-                        break
+                # Inner loop: play games until kick or num_games reached
+                while num_games is None or game_num < num_games:
+                    game_num += 1
 
-                    obs_0 = get_observation(state, 0)
-                    obs_1 = get_observation(state, 1)
+                    # Apply truncation changes between games
+                    if self._next_truncation != self.env.truncation:
+                        self.env = GeneralsEnv(
+                            grid_dims=self.env._fixed_dims,
+                            truncation=self._next_truncation,
+                            mountain_density_range=(self.env.mountain_density_range
+                                                    if hasattr(self.env, 'mountain_density_range')
+                                                    else (0.18, 0.26)),
+                            min_generals_distance=self.env.min_generals_distance,
+                            max_generals_distance=self.env.max_generals_distance,
+                        )
+                        print(f"  >> Env rebuilt with truncation={self._next_truncation}")
 
-                    try:
-                        send_msg(clients[assignment[0]], {
-                            "type": "observation",
-                            "obs": serialize_observation(obs_0),
-                            "turn": turn,
-                        })
-                        send_msg(clients[assignment[1]], {
-                            "type": "observation",
-                            "obs": serialize_observation(obs_1),
-                            "turn": turn,
-                        })
-                    except ConnectionError as e:
-                        print(f"Client disconnected during send: {e}")
-                        break
+                    self._force_end = False
+                    self._kick = []
 
-                    actions = [None, None]
+                    key, reset_key = jrandom.split(key)
+                    pool, state = self.env.reset(reset_key)
+
+                    p0_name = agent_ids[assignment[0]]
+                    p1_name = agent_ids[assignment[1]]
+                    grid_dims = list(state.armies.shape)
+
+                    print(f"\n--- Game {game_num}: {p0_name} (P0) vs {p1_name} (P1) ---")
+
                     for i in range(2):
-                        actions[i] = self._recv_action(clients[assignment[i]], agent_ids[assignment[i]])
-
-                    stacked = jnp.stack([jnp.array(a, dtype=jnp.int32) for a in actions])
-                    timestep, state = self.env.step(state, stacked, pool)
-
-                    if spectator:
-                        spectator.broadcast_state(state, timestep.info)
-
-                    terminated = bool(timestep.terminated)
-                    truncated = bool(timestep.truncated)
-                    turn += 1
-
-                    # Pace to target FPS (use current fps, may have changed mid-game)
-                    elapsed = time.monotonic() - tick_start
-                    remaining = (1.0 / self.fps) - elapsed
-                    if remaining > 0:
-                        time.sleep(remaining)
-
-                # Determine winner
-                winner_idx = int(timestep.info.winner)
-                if winner_idx >= 0:
-                    winner_name = [p0_name, p1_name][winner_idx]
-                    match_score[winner_name] += 1
-                    print(f"Game {game_num} over after {turn} turns. Winner: {winner_name}")
-                else:
-                    winner_name = None
-                    draws += 1
-                    print(f"Game {game_num} truncated after {turn} turns. Draw.")
-
-                score = {
-                    agent_ids[0]: match_score[agent_ids[0]],
-                    agent_ids[1]: match_score[agent_ids[1]],
-                    "draws": draws,
-                }
-
-                print(
-                    "Match score: "
-                    f"{agent_ids[0]}={match_score[agent_ids[0]]}, "
-                    f"{agent_ids[1]}={match_score[agent_ids[1]]}, "
-                    f"draws={draws}"
-                )
-
-                # Send game_end to clients
-                for i in range(2):
-                    try:
                         send_msg(clients[assignment[i]], {
-                            "type": "game_end",
-                            "winner": winner_idx,
-                            "winner_name": winner_name,
-                            "turns": turn,
+                            "type": "game_start",
+                            "player_id": i,
+                            "player_name": [p0_name, p1_name][i],
+                            "opponent_name": [p1_name, p0_name][i],
+                            "grid_dims": grid_dims,
                             "game_num": game_num,
-                            "score": score,
                         })
-                    except ConnectionError:
-                        pass
 
-                if spectator:
-                    spectator.game_end(winner_idx, winner_name, turn, game_num, score)
-
-                # Countdown between games
-                for s in range(5, 0, -1):
                     if spectator:
-                        spectator.countdown(s, game_num + 1)
-                    time.sleep(1)
+                        spectator.game_start(state, [p0_name, p1_name], self.colors, game_num)
 
-                # Swap player assignments for fairness
-                assignment = [assignment[1], assignment[0]]
+                    # Game loop
+                    terminated = truncated = False
+                    turn = 0
+
+                    while not (terminated or truncated):
+                        tick_start = time.monotonic()
+
+                        self._process_commands(spectator)
+                        if self._force_end:
+                            print(f"  >> Game {game_num} force-ended at turn {turn}")
+                            break
+
+                        obs_0 = get_observation(state, 0)
+                        obs_1 = get_observation(state, 1)
+
+                        try:
+                            send_msg(clients[assignment[0]], {
+                                "type": "observation",
+                                "obs": serialize_observation(obs_0),
+                                "turn": turn,
+                            })
+                            send_msg(clients[assignment[1]], {
+                                "type": "observation",
+                                "obs": serialize_observation(obs_1),
+                                "turn": turn,
+                            })
+                        except ConnectionError as e:
+                            print(f"Client disconnected during send: {e}")
+                            break
+
+                        actions = [None, None]
+                        for i in range(2):
+                            actions[i] = self._recv_action(clients[assignment[i]], agent_ids[assignment[i]])
+
+                        stacked = jnp.stack([jnp.array(a, dtype=jnp.int32) for a in actions])
+                        timestep, state = self.env.step(state, stacked, pool)
+
+                        if spectator:
+                            spectator.broadcast_state(state, timestep.info)
+
+                        terminated = bool(timestep.terminated)
+                        truncated = bool(timestep.truncated)
+                        turn += 1
+
+                        elapsed = time.monotonic() - tick_start
+                        remaining = (1.0 / self.fps) - elapsed
+                        if remaining > 0:
+                            time.sleep(remaining)
+
+                    # Determine winner
+                    winner_idx = int(timestep.info.winner) if not self._kick else -1
+                    if winner_idx >= 0:
+                        winner_name = [p0_name, p1_name][winner_idx]
+                        match_score[winner_name] += 1
+                        print(f"Game {game_num} over after {turn} turns. Winner: {winner_name}")
+                    else:
+                        winner_name = None
+                        draws += 1
+                        print(f"Game {game_num} {'force-ended' if self._kick else 'truncated'} after {turn} turns. Draw.")
+
+                    score = {
+                        agent_ids[0]: match_score[agent_ids[0]],
+                        agent_ids[1]: match_score[agent_ids[1]],
+                        "draws": draws,
+                    }
+
+                    print(
+                        "Match score: "
+                        f"{agent_ids[0]}={match_score[agent_ids[0]]}, "
+                        f"{agent_ids[1]}={match_score[agent_ids[1]]}, "
+                        f"draws={draws}"
+                    )
+
+                    for i in range(2):
+                        try:
+                            send_msg(clients[assignment[i]], {
+                                "type": "game_end",
+                                "winner": winner_idx,
+                                "winner_name": winner_name,
+                                "turns": turn,
+                                "game_num": game_num,
+                                "score": score,
+                            })
+                        except ConnectionError:
+                            pass
+
+                    if spectator:
+                        spectator.game_end(winner_idx, winner_name, turn, game_num, score)
+
+                    # Handle kicks — close sockets and break to lobby
+                    if self._kick:
+                        for idx in sorted(self._kick, reverse=True):
+                            name = agent_ids[idx]
+                            print(f"  >> Disconnecting {name}")
+                            try:
+                                clients[idx].close()
+                            except Exception:
+                                pass
+                            clients.pop(idx)
+                            agent_ids.pop(idx)
+                        # Close remaining clients too (they'll reconnect)
+                        for c in clients:
+                            try:
+                                c.close()
+                            except Exception:
+                                pass
+                        self._kick = []
+                        break  # back to lobby
+
+                    # Countdown between games
+                    for s in range(5, 0, -1):
+                        if spectator:
+                            spectator.countdown(s, game_num + 1)
+                        time.sleep(1)
+
+                    assignment = [assignment[1], assignment[0]]
 
         except KeyboardInterrupt:
             print("\nServer shutting down.")
         finally:
             for c in clients:
-                c.close()
+                try:
+                    c.close()
+                except Exception:
+                    pass
             srv.close()
             if spectator:
                 spectator.shutdown()
