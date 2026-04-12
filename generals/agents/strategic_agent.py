@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import time
 
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
 
+from generals.analysis.telemetry import Telemetry
 from generals.core.action import compute_valid_move_mask
 from generals.core.observation import Observation
 
@@ -66,14 +68,16 @@ class StrategicAgent(Agent):
         self._last_debug = None
         self._recent_choices = deque(maxlen=8)
         self._recent_action_kinds = deque(maxlen=8)
+        self._act_telemetry = Telemetry()
 
     def act(self, observation: Observation, key: jnp.ndarray) -> jnp.ndarray:
-        self._update_memory(observation)
-        self._phase = self._infer_phase(observation)
-        self._mode = self._infer_mode(observation)
-        self._update_punish_window(observation)
-        self._update_strategy_target(observation)
-        moves = self._extract_moves(observation)
+        act_start = time.perf_counter()
+        self._act_telemetry.time_block("act.update_memory", lambda: self._update_memory(observation))
+        self._phase = self._act_telemetry.time_block("act.infer_phase", lambda: self._infer_phase(observation))
+        self._mode = self._act_telemetry.time_block("act.infer_mode", lambda: self._infer_mode(observation))
+        self._act_telemetry.time_block("act.update_punish_window", lambda: self._update_punish_window(observation))
+        self._act_telemetry.time_block("act.update_strategy_target", lambda: self._update_strategy_target(observation))
+        moves = self._act_telemetry.time_block("act.extract_moves", lambda: self._extract_moves(observation))
         if not moves:
             self._last_debug = {
                 "decision": "pass",
@@ -90,22 +94,47 @@ class StrategicAgent(Agent):
                 "punish_reason": self._punish_reason,
                 "punish_window": int(self._punish_window),
             }
+            self._act_telemetry.record("act.total", time.perf_counter() - act_start)
             return jnp.array([1, 0, 0, 0, 0], dtype=jnp.int32)
 
-        base_scores = np.array([self.score_move(observation, move) for move in moves], dtype=np.float32)
-        phase_scores = np.array([self._phase_adjustment(observation, move) for move in moves], dtype=np.float32)
-        mode_scores = np.array([self._mode_adjustment(observation, move) for move in moves], dtype=np.float32)
-        punish_scores = np.array([self._punish_adjustment(observation, move) for move in moves], dtype=np.float32)
-        continuation_scores = np.array([self._continuation_value(observation, move) for move in moves], dtype=np.float32)
-        adjustments = np.array([self._score_adjustment(observation, move) for move in moves], dtype=np.float32)
-        noise = np.array(jrandom.uniform(key, shape=(len(moves),), minval=-0.15, maxval=0.15), dtype=np.float32)
+        base_scores = self._act_telemetry.time_block(
+            "act.score.base",
+            lambda: np.array([self.score_move(observation, move) for move in moves], dtype=np.float32),
+        )
+        phase_scores = self._act_telemetry.time_block(
+            "act.score.phase",
+            lambda: np.array([self._phase_adjustment(observation, move) for move in moves], dtype=np.float32),
+        )
+        mode_scores = self._act_telemetry.time_block(
+            "act.score.mode",
+            lambda: np.array([self._mode_adjustment(observation, move) for move in moves], dtype=np.float32),
+        )
+        punish_scores = self._act_telemetry.time_block(
+            "act.score.punish",
+            lambda: np.array([self._punish_adjustment(observation, move) for move in moves], dtype=np.float32),
+        )
+        continuation_scores = self._act_telemetry.time_block(
+            "act.score.continuation",
+            lambda: np.array([self._continuation_value(observation, move) for move in moves], dtype=np.float32),
+        )
+        adjustments = self._act_telemetry.time_block(
+            "act.score.adjustment",
+            lambda: np.array([self._score_adjustment(observation, move) for move in moves], dtype=np.float32),
+        )
+        noise = self._act_telemetry.time_block(
+            "act.score.noise",
+            lambda: np.array(jrandom.uniform(key, shape=(len(moves),), minval=-0.15, maxval=0.15), dtype=np.float32),
+        )
         scores = base_scores + phase_scores + mode_scores + punish_scores + continuation_scores + adjustments + noise
-        best_idx = int(np.argmax(scores))
+        best_idx = self._act_telemetry.time_block("act.select_best", lambda: int(np.argmax(scores)))
         best = moves[best_idx]
-        split = self.choose_split(observation, best)
-        chosen_kind = self._classify_move(best)
-        self._remember_choice(best, chosen_kind)
-        top_order = np.argsort(scores)[::-1][: min(3, len(scores))]
+        split = self._act_telemetry.time_block("act.choose_split", lambda: self.choose_split(observation, best))
+        chosen_kind = self._act_telemetry.time_block("act.classify_chosen", lambda: self._classify_move(best))
+        self._act_telemetry.time_block("act.remember_choice", lambda: self._remember_choice(best, chosen_kind))
+        top_order = self._act_telemetry.time_block(
+            "act.rank_candidates",
+            lambda: np.argsort(scores)[::-1][: min(3, len(scores))],
+        )
         self._last_debug = {
             "decision": "move",
             "phase": self._phase,
@@ -155,6 +184,7 @@ class StrategicAgent(Agent):
                 "score": float(scores[best_idx]),
             },
         }
+        self._act_telemetry.record("act.total", time.perf_counter() - act_start)
         return jnp.array([0, best.row, best.col, best.direction, split], dtype=jnp.int32)
 
     def score_move(self, observation: Observation, move: MoveFeatures) -> float:
@@ -342,6 +372,9 @@ class StrategicAgent(Agent):
 
     def get_debug_snapshot(self) -> dict | None:
         return self._last_debug
+
+    def get_profile_stats(self) -> dict | None:
+        return self._act_telemetry.snapshot()
 
     def _update_strategy_target(self, observation: Observation) -> None:
         if self._target_commitment > 0:

@@ -73,6 +73,7 @@ class MatchLogger:
         keyframe_every: int = 25,
         enable_keyframes: bool = True,
         keyframe_on: set[str] | None = None,
+        render_keyframe_pngs: bool = True,
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +85,7 @@ class MatchLogger:
         self.enable_keyframes = enable_keyframes
         self.keyframe_every = keyframe_every
         self.keyframe_on = keyframe_on or {"anomaly", "city", "general", "periodic", "game_end", "land_swing"}
+        self.render_keyframe_pngs = render_keyframe_pngs
         self.anomaly_keyframe_threshold = 10.0
         self.anomaly_keyframe_types = {
             "large_army_pass",
@@ -283,7 +285,14 @@ class MatchLogger:
         )
         self._slow_turns = sorted(self._slow_turns, key=lambda item: item["duration_sec"], reverse=True)[:10]
 
-    def finish_game(self, winner: int, winner_name: str | None, turns: int, final_state: GameState | None = None):
+    def finish_game(
+        self,
+        winner: int,
+        winner_name: str | None,
+        turns: int,
+        final_state: GameState | None = None,
+        agents: list[Agent] | None = None,
+    ):
         start = time.perf_counter()
         if final_state is not None and self.enable_keyframes and "game_end" in self.keyframe_on:
             self.telemetry.time_block(
@@ -301,6 +310,11 @@ class MatchLogger:
             "slowest_turns": self._slow_turns,
             "keyframes": self._keyframe_count,
             "events": self._event_count,
+            "agent_profiles": {
+                agent.id: profile
+                for agent in (agents or [])
+                if (profile := agent.get_profile_stats()) is not None
+            },
             "telemetry": self.telemetry.snapshot(),
         }
         self.telemetry.record("finish_game.total", time.perf_counter() - start)
@@ -351,7 +365,8 @@ class MatchLogger:
         tag = "__".join(dict.fromkeys(reasons))
         stem = f"{turn:04d}__{tag}"
         write_keyframe_json(self.keyframes_dir / f"{stem}.json", state, reasons)
-        render_state_png(self.keyframes_dir / f"{stem}.png", state)
+        if self.render_keyframe_pngs:
+            render_state_png(self.keyframes_dir / f"{stem}.png", state)
         self._keyframe_count += 1
         if "anomaly" in reasons:
             self._last_anomaly_keyframe_turn = turn

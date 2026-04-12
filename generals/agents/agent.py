@@ -34,5 +34,9 @@ class Agent(ABC):
         """Optional per-turn debug information for logging and analysis."""
         return None
 
+    def get_profile_stats(self) -> dict[str, Any] | None:
+        """Optional profiling data accumulated across decisions."""
+        return None
+
     def __str__(self):
         return self.id

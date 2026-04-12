@@ -226,7 +226,10 @@ while not (terminated or truncated):
 
 winner = int(timestep.info.winner)
 winner_name = [agent_a.id, agent_b.id][winner] if winner >= 0 else None
-telemetry.time_block("logger.finish_game", lambda: logger.finish_game(winner, winner_name, turn, final_state=state))
+telemetry.time_block(
+    "logger.finish_game",
+    lambda: logger.finish_game(winner, winner_name, turn, final_state=state, agents=[agent_a, agent_b]),
+)
 telemetry.record("match.total", time.perf_counter() - match_start)
 telemetry.merge(logger.telemetry, prefix="logger")
 

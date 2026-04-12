@@ -2,6 +2,7 @@
 from .agent import Agent
 from .random_agent import RandomAgent
 from .expander_agent import ExpanderAgent
+from .graph_search_agent import GraphSearchAgent
 from .loading import build_agent, load_agent_factory
 from .strategic_agent import (
     BackdoorAgent,
@@ -21,6 +22,7 @@ __all__ = [
     "Agent",
     "RandomAgent",
     "ExpanderAgent",
+    "GraphSearchAgent",
     "MaterialAdvantageAgent",
     "ScoutPressureAgent",
     "BackdoorAgent",
