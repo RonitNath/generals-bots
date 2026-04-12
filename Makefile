@@ -9,9 +9,6 @@ lan_server:
 lan_client:
 	uv run python examples/lan_client.py
 
-remote:
-	uv run python -m examples.client_example
-
 ###################
 # Developer tools #
 ###################

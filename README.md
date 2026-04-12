@@ -27,7 +27,6 @@ The core modules are:
 - `generals/core/`: game rules, state, observations, actions, rewards, grid generation
 - `generals/agents/`: agent interface, built-in baseline agents, agent loading utilities
 - `generals/lan/`: TCP server/client protocol for remote bot play over LAN
-- `generals/remote/`: live generals.io integration
 - `generals/gui/`: local pygame-based visualization/debugging
 - `examples/`: runnable scripts for local use
 - `tests/`: core correctness and performance tests
@@ -289,16 +288,6 @@ If two people are building agents against this repo:
 3. Use `--agent-custom` so shared scripts stay unchanged.
 4. Run `uv run --extra dev pytest` before merging platform changes.
 5. Treat server/protocol changes as shared infrastructure and agent logic as independent work.
-
-## Live generals.io Support
-
-The repo also still includes live generals.io integration through `generals.remote`, but that is not the primary workflow for the LAN competition setup.
-
-Example:
-
-```bash
-uv run python examples/client_example.py --user_id <user-id> --lobby_id <lobby-id>
-```
 
 ## License
 
