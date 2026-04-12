@@ -56,6 +56,12 @@ def generate_grid(
     max_mountains = int(mountain_density_range[1] * num_tiles)
     num_mountains = jax.random.randint(keys[1], (), min_mountains, max_mountains + 1)
 
+    # Clamp min_generals_distance to be feasible for the grid size.
+    # From an interior cell, max Manhattan distance to any corner is roughly h+w-4.
+    # Cap at 2/3 of grid diagonal to guarantee valid spawn pairs exist.
+    max_feasible = (h + w) * 2 // 3
+    min_generals_distance = min(min_generals_distance, max_feasible)
+
     base_grid = jnp.full(grid_dims, 0, dtype=jnp.int32)
 
     # Step 1: sample several spawn pairs and several terrain layouts per pair.
@@ -84,10 +90,8 @@ def generate_grid(
         spawn_a_band = jnp.where(jnp.any(spawn_a_band), spawn_a_band, interior)
         spawn_b_band = jnp.where(jnp.any(spawn_b_band), spawn_b_band, interior)
 
-        spawn_a_pref = (
-            -0.8 * jnp.where(horizontal_split, jnp.abs(row_idx - (h // 2)), jnp.abs(col_idx - (w // 2))).astype(jnp.float32)
-            -0.2 * center_dist_candidate.astype(jnp.float32)
-        )
+        # Light preference: avoid edges but don't force center. Gumbel noise dominates.
+        spawn_a_pref = -0.15 * center_dist_candidate.astype(jnp.float32)
         pos_first = sample_weighted_from_mask(spawn_a_band, spawn_a_pref, keys[spawn_key_offset + 1])
         dist_from_first = manhattan_distance_from(pos_first, grid_dims)
         separation_bias = jnp.where(horizontal_split, jnp.abs(row_idx - pos_first[0]), jnp.abs(col_idx - pos_first[1]))
