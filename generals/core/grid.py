@@ -143,100 +143,20 @@ def generate_grid(
             dist_a = bfs_distance_map(terrain_passable, pos_a)
             dist_b = bfs_distance_map(terrain_passable, pos_b)
 
-            castle_val_a = jax.random.randint(keys[key_offset + 1], (), castle_val_range[0], castle_val_range[1])
-            castle_val_b = jax.random.randint(keys[key_offset + 2], (), castle_val_range[0], castle_val_range[1])
-            near_a_primary = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_a >= 4)
-                & (dist_a <= 6)
-                & ((dist_b < 0) | (dist_a + 1 < dist_b))
+            # City placement: scatter randomly on empty non-opening tiles.
+            # Light preference to stay away from generals (not too close)
+            # and toward fairness (small |dist_a - dist_b|). Gumbel dominates.
+            city_available = (candidate_grid == 0) & (~opening_buffer)
+            min_city_dist = jnp.minimum(dist_a, dist_b).astype(jnp.float32)
+            city_pref = (
+                0.3 * min_city_dist  # not too close to either general
+                - 0.2 * jnp.abs(dist_a - dist_b).astype(jnp.float32)  # mild fairness
             )
-            near_a_secondary = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_a >= 3)
-                & (dist_a <= 8)
-                & ((dist_b < 0) | (dist_a < dist_b))
-            )
-            near_a_fallback = (candidate_grid == 0) & (~opening_buffer) & (dist_a >= 3)
-            castle_a_mask = first_nonempty_mask(near_a_primary, near_a_secondary, near_a_fallback)
-            pos_castle_a = sample_from_mask(castle_a_mask, keys[key_offset + 3])
-            candidate_grid = candidate_grid.at[pos_castle_a].set(castle_val_a)
-
-            near_b_primary = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_b >= 4)
-                & (dist_b <= 6)
-                & ((dist_a < 0) | (dist_b + 1 < dist_a))
-            )
-            near_b_secondary = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_b >= 3)
-                & (dist_b <= 8)
-                & ((dist_a < 0) | (dist_b < dist_a))
-            )
-            near_b_fallback = (candidate_grid == 0) & (~opening_buffer) & (dist_b >= 3)
-            castle_b_mask = first_nonempty_mask(near_b_primary, near_b_secondary, near_b_fallback)
-            pos_castle_b = sample_from_mask(castle_b_mask, keys[key_offset + 4])
-            candidate_grid = candidate_grid.at[pos_castle_b].set(castle_val_b)
-
-            remaining_cities = jnp.maximum(0, num_cities - 2)
-            city_slots = min(12, num_tiles)
-            city_dist_target = 8.0
-
-            side_a_mask = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_a >= 5)
-                & (dist_a <= 11)
-                & ((dist_b < 0) | (dist_a + 1 < dist_b))
-            )
-            side_b_mask = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (dist_b >= 5)
-                & (dist_b <= 11)
-                & ((dist_a < 0) | (dist_b + 1 < dist_a))
-            )
-            contested_mask = (
-                (candidate_grid == 0)
-                & (~opening_buffer)
-                & (jnp.minimum(dist_a, dist_b) >= 6)
-                & (jnp.minimum(dist_a, dist_b) <= 12)
-                & (jnp.abs(dist_a - dist_b) <= 2)
-            )
-
-            side_a_pref = -jnp.abs(dist_a.astype(jnp.float32) - city_dist_target) - 0.4 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
-            side_b_pref = -jnp.abs(dist_b.astype(jnp.float32) - city_dist_target) - 0.4 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
-            contested_pref = -jnp.abs(jnp.minimum(dist_a, dist_b).astype(jnp.float32) - (city_dist_target + 1.0)) - 0.6 * jnp.abs((dist_a - dist_b).astype(jnp.float32))
-
-            contested_target = jnp.minimum(2, remaining_cities // 3)
-            side_target = remaining_cities - contested_target
-            side_a_target = side_target // 2
-            side_b_target = side_target - side_a_target
-
-            side_a_indices = weighted_top_k_from_mask(side_a_mask, side_a_pref, city_slots, keys[key_offset + 5])
-            city_values_a = jax.random.randint(keys[key_offset + 6], (city_slots,), castle_val_range[0], castle_val_range[1])
+            city_slots = min(16, num_tiles)
+            city_indices = weighted_top_k_from_mask(city_available, city_pref, city_slots, keys[key_offset + 1])
+            city_values = jax.random.randint(keys[key_offset + 2], (city_slots,), castle_val_range[0], castle_val_range[1])
             flat_grid = candidate_grid.reshape(-1)
-            flat_grid = place_values_at_indices(flat_grid, side_a_indices, city_values_a, jnp.minimum(side_a_target, jnp.sum(side_a_mask)))
-            candidate_grid = flat_grid.reshape(grid_dims)
-
-            side_b_mask = side_b_mask & (candidate_grid == 0)
-            contested_mask = contested_mask & (candidate_grid == 0)
-            side_b_indices = weighted_top_k_from_mask(side_b_mask, side_b_pref, city_slots, keys[key_offset + 5] ^ jnp.uint32(13))
-            city_values_b = jax.random.randint(keys[key_offset + 6] ^ jnp.uint32(29), (city_slots,), castle_val_range[0], castle_val_range[1])
-            flat_grid = candidate_grid.reshape(-1)
-            flat_grid = place_values_at_indices(flat_grid, side_b_indices, city_values_b, jnp.minimum(side_b_target, jnp.sum(side_b_mask)))
-            candidate_grid = flat_grid.reshape(grid_dims)
-
-            contested_mask = contested_mask & (candidate_grid == 0)
-            contested_indices = weighted_top_k_from_mask(contested_mask, contested_pref, city_slots, keys[key_offset + 7])
-            city_values_c = jax.random.randint(keys[key_offset + 6] ^ jnp.uint32(43), (city_slots,), castle_val_range[0], castle_val_range[1])
-            flat_grid = candidate_grid.reshape(-1)
-            flat_grid = place_values_at_indices(flat_grid, contested_indices, city_values_c, jnp.minimum(contested_target, jnp.sum(contested_mask)))
+            flat_grid = place_values_at_indices(flat_grid, city_indices, city_values, num_cities)
             candidate_grid = flat_grid.reshape(grid_dims)
 
             connected = flood_fill_connected(candidate_grid, pos_a, pos_b)
