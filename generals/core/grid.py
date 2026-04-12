@@ -143,15 +143,12 @@ def generate_grid(
             dist_a = bfs_distance_map(terrain_passable, pos_a)
             dist_b = bfs_distance_map(terrain_passable, pos_b)
 
-            # City placement: scatter randomly on empty non-opening tiles.
-            # Light preference to stay away from generals (not too close)
-            # and toward fairness (small |dist_a - dist_b|). Gumbel dominates.
+            # City placement: uniform random scatter on empty non-opening tiles.
+            # Zero preference — Gumbel noise gives uniform distribution.
+            # opening_buffer keeps cities away from generals; score_layout
+            # picks the fairest candidate from multiple random layouts.
             city_available = (candidate_grid == 0) & (~opening_buffer)
-            min_city_dist = jnp.minimum(dist_a, dist_b).astype(jnp.float32)
-            city_pref = (
-                0.3 * min_city_dist  # not too close to either general
-                - 0.2 * jnp.abs(dist_a - dist_b).astype(jnp.float32)  # mild fairness
-            )
+            city_pref = jnp.zeros(grid_dims, dtype=jnp.float32)
             city_slots = min(16, num_tiles)
             city_indices = weighted_top_k_from_mask(city_available, city_pref, city_slots, keys[key_offset + 1])
             city_values = jax.random.randint(keys[key_offset + 2], (city_slots,), castle_val_range[0], castle_val_range[1])
