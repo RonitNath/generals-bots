@@ -62,6 +62,7 @@ class LANServer:
         spectator_port: int = 8080,
         no_spectator: bool = False,
         colors: list[list[int]] | None = None,
+        ctl_port: int = 5556,
     ):
         """
         Args:
@@ -82,6 +83,7 @@ class LANServer:
         self.spectator_port = spectator_port
         self.no_spectator = no_spectator
         self.colors = colors or DEFAULT_COLORS
+        self.ctl_port = ctl_port
 
         # Mutable settings changed via CLI commands
         self._next_truncation = env.truncation
@@ -90,8 +92,9 @@ class LANServer:
         self._cmd_queue: queue.Queue[str] = queue.Queue()
 
     def _start_cli(self):
-        """Start background thread reading stdin commands."""
-        def _reader():
+        """Start stdin reader and TCP control socket."""
+        # Stdin reader (for local interactive use)
+        def _stdin_reader():
             while True:
                 try:
                     line = sys.stdin.readline()
@@ -102,8 +105,38 @@ class LANServer:
                         self._cmd_queue.put(line)
                 except EOFError:
                     break
-        t = threading.Thread(target=_reader, daemon=True)
-        t.start()
+        threading.Thread(target=_stdin_reader, daemon=True).start()
+
+        # TCP control socket (for remote CLI)
+        def _ctl_server():
+            ctl = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            ctl.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            ctl.bind((self.host, self.ctl_port))
+            ctl.listen(4)
+            while True:
+                conn, addr = ctl.accept()
+                threading.Thread(target=self._handle_ctl_client, args=(conn,), daemon=True).start()
+        threading.Thread(target=_ctl_server, daemon=True).start()
+
+    def _handle_ctl_client(self, conn: socket.socket):
+        """Handle a single control connection. One command per line, responses sent back."""
+        try:
+            buf = b""
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                buf += data
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    cmd = line.decode("utf-8", errors="replace").strip()
+                    if cmd:
+                        self._cmd_queue.put(cmd)
+                        conn.sendall(f"ok: {cmd}\n".encode())
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            conn.close()
 
     def _process_commands(self, spectator=None):
         """Drain command queue, apply changes. Called each tick."""
@@ -193,6 +226,7 @@ class LANServer:
         srv.bind((self.host, self.port))
         srv.listen(2)
         print(f"LAN Server listening on {self.host}:{self.port}")
+        print(f"Control port on {self.host}:{self.ctl_port}")
         print(f"Type 'help' for server commands.\n")
 
         self._start_cli()

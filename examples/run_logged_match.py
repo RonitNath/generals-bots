@@ -22,7 +22,7 @@ from generals.agents import (
     SurroundPressureAgent,
     build_agent,
 )
-from generals.analysis import MatchLogger
+from generals.analysis import MatchLogger, analyze_map_fairness
 from generals.core.game import get_info
 
 
@@ -54,6 +54,10 @@ parser.add_argument("--output", type=str, default="logs/latest-match")
 parser.add_argument("--keyframe-every", type=int, default=25)
 parser.add_argument("--no-keyframes", action="store_true")
 parser.add_argument("--keyframe-on", type=str, default="game_start,periodic,city,general,land_swing,anomaly,game_end")
+parser.add_argument("--min-fairness-score", type=float, default=0.65)
+parser.add_argument("--max-map-rerolls", type=int, default=20)
+parser.add_argument("--min-spawn-distance", type=int, default=8)
+parser.add_argument("--min-opening-area", type=int, default=18)
 
 choices = ["random", "expander", "material", "scout", "backdoor", "defense", "surround"]
 parser.add_argument("--agent-a", type=str, default="material", choices=choices)
@@ -71,11 +75,31 @@ gui = None
 if args.gui:
     from generals.gui import ReplayGUI
 
-env = GeneralsEnv(grid_dims=(args.grid, args.grid), truncation=args.truncation)
+env = GeneralsEnv(
+    grid_dims=(args.grid, args.grid),
+    truncation=args.truncation,
+    min_generals_distance=args.min_spawn_distance,
+)
 key = jrandom.PRNGKey(args.seed)
-pool, state = env.reset(key)
+selected_attempt = 0
+fairness_report = None
+map_accepted = False
+for attempt in range(args.max_map_rerolls + 1):
+    key, reset_key = jrandom.split(key)
+    pool, state = env.reset(reset_key)
+    fairness_report = analyze_map_fairness(state)
+    selected_attempt = attempt
+    spawn_distance = fairness_report.get("spawn_distance")
+    opening_area = fairness_report.get("opening_area_within_4", [0, 0])
+    map_accepted = (
+        fairness_report["fairness_score"] >= args.min_fairness_score
+        and not fairness_report["reject_map"]
+        and (spawn_distance is None or spawn_distance >= args.min_spawn_distance)
+        and min(opening_area) >= args.min_opening_area
+    )
+    if map_accepted:
+        break
 
-logger = MatchLogger(args.output)
 logger = MatchLogger(
     args.output,
     keyframe_every=args.keyframe_every,
@@ -89,6 +113,13 @@ logger.start_game(
     env_config={
         "grid": args.grid,
         "truncation": args.truncation,
+        "min_fairness_score": args.min_fairness_score,
+        "max_map_rerolls": args.max_map_rerolls,
+        "min_spawn_distance": args.min_spawn_distance,
+        "min_opening_area": args.min_opening_area,
+        "generator_min_generals_distance": args.min_spawn_distance,
+        "map_reroll_attempts": selected_attempt,
+        "map_accepted": map_accepted,
     },
 )
 
@@ -139,4 +170,11 @@ if gui is not None:
     gui.close()
 
 print(f"Logged match to {args.output}")
+print(
+    "Map fairness: "
+    f"{fairness_report['fairness_score']:.3f} "
+    f"({'accepted' if map_accepted else 'fallback'}) after {selected_attempt} rerolls; "
+    f"spawn_distance={fairness_report.get('spawn_distance')}, "
+    f"opening_area={fairness_report.get('opening_area_within_4')}"
+)
 print(f"Winner: {winner_name if winner_name is not None else 'draw'} in {turn} turns")

@@ -61,6 +61,10 @@ def _city_metrics(cities: np.ndarray, dist: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _reachable_within(dist: np.ndarray, steps: int) -> int:
+    return int(np.sum((dist >= 0) & (dist <= steps)))
+
+
 def analyze_map_fairness(state: GameState) -> dict[str, Any]:
     """
     Compute a lightweight fairness report for an initial map.
@@ -88,6 +92,9 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
     city1 = _city_metrics(cities, dist1)
     city0["cities_within_15"] = int(np.sum((dist0 >= 0) & cities & (dist0 <= 15)))
     city1["cities_within_15"] = int(np.sum((dist1 >= 0) & cities & (dist1 <= 15)))
+    opening_area_4 = [_reachable_within(dist0, 4), _reachable_within(dist1, 4)]
+    opening_area_6 = [_reachable_within(dist0, 6), _reachable_within(dist1, 6)]
+    spawn_distance = int(dist0[generals[1]]) if dist0[generals[1]] >= 0 else None
 
     center = (passable.shape[0] // 2, passable.shape[1] // 2)
     center_dist0 = int(dist0[center]) if dist0[center] >= 0 else None
@@ -118,16 +125,33 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
         warnings.append("mid-range city density differs materially")
     if chokepoint_ratio > 0.18:
         warnings.append("early frontier width differs materially")
+    if spawn_distance is not None and spawn_distance < 8:
+        warnings.append("generals spawn too close for realistic openings")
+    if min(opening_area_4) < 18:
+        warnings.append("opening space is cramped near at least one spawn")
+    if abs(opening_area_4[0] - opening_area_4[1]) >= 5:
+        warnings.append("opening space differs materially between spawns")
 
     fairness_score = 1.0
     fairness_score -= min(territory_balance_ratio * 1.5, 0.35)
     fairness_score -= min((nearest_city_gap or 0) * 0.06, 0.18)
     fairness_score -= min((center_gap or 0) * 0.04, 0.12)
     fairness_score -= min(chokepoint_ratio * 0.8, 0.15)
+    if spawn_distance is not None and spawn_distance < 8:
+        fairness_score -= min((8 - spawn_distance) * 0.08, 0.32)
+    if min(opening_area_4) < 18:
+        fairness_score -= min((18 - min(opening_area_4)) * 0.03, 0.24)
+    fairness_score -= min(abs(opening_area_4[0] - opening_area_4[1]) * 0.02, 0.12)
     fairness_score = max(0.0, fairness_score)
+    reject_map = fairness_score < 0.65
+    if spawn_distance is not None and spawn_distance < 8:
+        reject_map = True
+    if min(opening_area_4) < 18:
+        reject_map = True
 
     return {
         "general_positions": [list(generals[0]), list(generals[1])],
+        "spawn_distance": spawn_distance,
         "passable_cells": int(np.sum(passable)),
         "jointly_reachable_cells": int(np.sum(jointly_reachable)),
         "closer_to_p0": int(np.sum(closer0)),
@@ -135,11 +159,13 @@ def analyze_map_fairness(state: GameState) -> dict[str, Any]:
         "contested_cells": int(np.sum(contested)),
         "territory_balance_ratio": territory_balance_ratio,
         "center_distance": [center_dist0, center_dist1],
+        "opening_area_within_4": opening_area_4,
+        "opening_area_within_6": opening_area_6,
         "frontier_cells_within_5": [frontier0, frontier1],
         "frontier_asymmetry_ratio": chokepoint_ratio,
         "city_access": [city0, city1],
         "fairness_score": fairness_score,
-        "reject_map": fairness_score < 0.65,
+        "reject_map": reject_map,
         "warnings": warnings,
         "recommendations": [
             "reroll the seed for competitive evaluation" if warnings else "map is acceptable for casual testing"

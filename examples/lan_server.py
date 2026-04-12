@@ -24,6 +24,7 @@ parser.add_argument("--timeout", type=float, default=2.0, help="Action timeout (
 parser.add_argument("--fps", type=int, default=6)
 parser.add_argument("--games", type=int, default=None, help="Number of games (default: infinite)")
 parser.add_argument("--spectator-port", type=int, default=8080, help="HTTP/WebSocket port for spectator UI")
+parser.add_argument("--ctl-port", type=int, default=5556, help="TCP control port for remote CLI (default 5556)")
 parser.add_argument("--no-spectator", action="store_true", help="Disable web spectator UI")
 parser.add_argument("--min-distance", type=int, default=20, help="Min Manhattan distance between generals (default: 20 = opposite sides)")
 parser.add_argument("--max-distance", type=int, default=None, help="Max Manhattan distance between generals")
@@ -43,5 +44,6 @@ server = LANServer(
     fps=args.fps,
     spectator_port=args.spectator_port,
     no_spectator=args.no_spectator,
+    ctl_port=args.ctl_port,
 )
 server.run(seed=args.seed, num_games=args.games)

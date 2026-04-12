@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 import jax.numpy as jnp
+import jax.random as jrandom
 import numpy as np
 
 from generals.core.action import compute_valid_move_mask
@@ -50,34 +52,50 @@ class StrategicAgent(Agent):
         self._last_seen_cities = None
         self._own_general = None
         self._enemy_general_estimate = None
+        self._current_target = None
+        self._target_kind = None
+        self._target_commitment = 0
         self._last_debug = None
+        self._recent_choices = deque(maxlen=8)
+        self._recent_action_kinds = deque(maxlen=8)
 
     def act(self, observation: Observation, key: jnp.ndarray) -> jnp.ndarray:
-        del key
         self._update_memory(observation)
+        self._update_strategy_target(observation)
         moves = self._extract_moves(observation)
         if not moves:
             self._last_debug = {
                 "decision": "pass",
                 "reason": "no_valid_moves",
                 "enemy_general_estimate": self._enemy_general_estimate,
+                "strategic_target": self._current_target,
+                "target_kind": self._target_kind,
             }
             return jnp.array([1, 0, 0, 0, 0], dtype=jnp.int32)
 
-        scores = np.array([self.score_move(observation, move) for move in moves], dtype=np.float32)
+        base_scores = np.array([self.score_move(observation, move) for move in moves], dtype=np.float32)
+        adjustments = np.array([self._score_adjustment(observation, move) for move in moves], dtype=np.float32)
+        noise = np.array(jrandom.uniform(key, shape=(len(moves),), minval=-0.15, maxval=0.15), dtype=np.float32)
+        scores = base_scores + adjustments + noise
         best_idx = int(np.argmax(scores))
         best = moves[best_idx]
         split = self.choose_split(observation, best)
+        chosen_kind = self._classify_move(best)
+        self._remember_choice(best, chosen_kind)
         top_order = np.argsort(scores)[::-1][: min(3, len(scores))]
         self._last_debug = {
             "decision": "move",
             "enemy_general_estimate": self._enemy_general_estimate,
             "own_general": self._own_general,
+            "strategic_target": self._current_target,
+            "target_kind": self._target_kind,
             "top_candidates": [
                 {
                     "source": [moves[i].row, moves[i].col],
                     "direction": moves[i].direction,
                     "dest": [moves[i].dest_row, moves[i].dest_col],
+                    "base_score": float(base_scores[i]),
+                    "adjustment": float(adjustments[i]),
                     "score": float(scores[i]),
                     "capture": bool(moves[i].can_capture),
                     "city": bool(moves[i].dest_is_city),
@@ -90,7 +108,10 @@ class StrategicAgent(Agent):
                 "source": [best.row, best.col],
                 "direction": best.direction,
                 "dest": [best.dest_row, best.dest_col],
+                "kind": chosen_kind,
                 "split": int(split),
+                "base_score": float(base_scores[best_idx]),
+                "adjustment": float(adjustments[best_idx]),
                 "score": float(scores[best_idx]),
             },
         }
@@ -229,8 +250,219 @@ class StrategicAgent(Agent):
         opp = max(float(observation.opponent_army_count), 1.0)
         return mine / opp
 
+    def _distance_to_target(self, row: int, col: int) -> int:
+        if self._current_target is None:
+            return 0
+        return abs(row - self._current_target[0]) + abs(col - self._current_target[1])
+
     def get_debug_snapshot(self) -> dict | None:
         return self._last_debug
+
+    def _update_strategy_target(self, observation: Observation) -> None:
+        if self._target_commitment > 0:
+            self._target_commitment -= 1
+
+        if self._current_target is not None and self._target_kind == "enemy_general" and self._enemy_general_estimate is not None:
+            self._current_target = self._enemy_general_estimate
+
+        if self._should_retarget(observation):
+            target = self._select_target(observation)
+            if target is None:
+                self._current_target = None
+                self._target_kind = None
+                self._target_commitment = 0
+            else:
+                self._current_target, self._target_kind = target
+                self._target_commitment = 8
+
+    def _should_retarget(self, observation: Observation) -> bool:
+        if self._current_target is None or self._target_kind is None:
+            return True
+        if self._target_commitment <= 0:
+            return True
+
+        row, col = self._current_target
+        owned = np.asarray(observation.owned_cells)
+        opponent = np.asarray(observation.opponent_cells)
+        cities = np.asarray(observation.cities)
+        visible = ~(np.asarray(observation.fog_cells) | np.asarray(observation.structures_in_fog))
+
+        if self._target_kind == "enemy_general":
+            return False
+        if visible[row, col]:
+            if self._target_kind == "enemy_city":
+                return bool(owned[row, col] or not cities[row, col])
+            if self._target_kind == "enemy_frontier":
+                return not bool(opponent[row, col])
+            if self._target_kind == "neutral_city":
+                return bool(owned[row, col] or opponent[row, col] or not cities[row, col])
+            if self._target_kind in {"structure_fog", "unseen"}:
+                return True
+        return False
+
+    def _select_target(self, observation: Observation) -> tuple[tuple[int, int], str] | None:
+        if self._enemy_general_estimate is not None:
+            return self._enemy_general_estimate, "enemy_general"
+
+        opponent = np.asarray(observation.opponent_cells)
+        cities = np.asarray(observation.cities)
+        structures_fog = np.asarray(observation.structures_in_fog)
+        fog = np.asarray(observation.fog_cells)
+        owned = np.asarray(observation.owned_cells)
+
+        enemy_city_positions = np.argwhere(opponent & cities)
+        if len(enemy_city_positions):
+            return tuple(map(int, enemy_city_positions[0])), "enemy_city"
+
+        enemy_positions = np.argwhere(opponent)
+        if len(enemy_positions):
+            best_enemy = max(
+                enemy_positions.tolist(),
+                key=lambda pos: self._target_priority(observation, tuple(pos), "enemy_frontier"),
+            )
+            return tuple(map(int, best_enemy)), "enemy_frontier"
+
+        structure_positions = np.argwhere(structures_fog)
+        if len(structure_positions):
+            best_structure = max(
+                structure_positions.tolist(),
+                key=lambda pos: self._target_priority(observation, tuple(pos), "structure_fog"),
+            )
+            return tuple(map(int, best_structure)), "structure_fog"
+
+        neutral_city_positions = np.argwhere(cities & ~owned & ~opponent)
+        if len(neutral_city_positions):
+            best_city = max(
+                neutral_city_positions.tolist(),
+                key=lambda pos: self._target_priority(observation, tuple(pos), "neutral_city"),
+            )
+            return tuple(map(int, best_city)), "neutral_city"
+
+        unseen_positions = np.argwhere(fog)
+        if len(unseen_positions):
+            best_unseen = max(
+                unseen_positions.tolist(),
+                key=lambda pos: self._target_priority(observation, tuple(pos), "unseen"),
+            )
+            return tuple(map(int, best_unseen)), "unseen"
+        return None
+
+    def _target_priority(self, observation: Observation, pos: tuple[int, int], kind: str) -> float:
+        base_scores = {
+            "enemy_general": 300.0,
+            "enemy_city": 220.0,
+            "enemy_frontier": 180.0,
+            "structure_fog": 150.0,
+            "neutral_city": 120.0,
+            "unseen": 90.0,
+        }
+        score = base_scores[kind]
+        if self._own_general is not None:
+            home_dist = abs(pos[0] - self._own_general[0]) + abs(pos[1] - self._own_general[1])
+            score -= 0.8 * home_dist
+        if self._enemy_general_estimate is not None:
+            enemy_dist = abs(pos[0] - self._enemy_general_estimate[0]) + abs(pos[1] - self._enemy_general_estimate[1])
+            score -= 0.3 * enemy_dist
+        if kind in {"enemy_frontier", "enemy_city"}:
+            score += 10.0 * self._material_ratio(observation)
+        if kind == "neutral_city" and self._material_ratio(observation) < 0.9:
+            score -= 20.0
+        return score
+
+    def _classify_move(self, move: MoveFeatures) -> str:
+        if move.dest_is_general and move.can_capture:
+            return "attack_general"
+        if move.dest_is_city:
+            return "attack_city" if (move.dest_is_opponent or move.dest_is_neutral) else "reinforce_city"
+        if move.dest_is_opponent:
+            return "attack"
+        if move.dest_is_neutral:
+            return "expand"
+        if move.dest_is_fog or move.dest_is_structure_fog:
+            return "scout"
+        if move.dest_is_owned:
+            return "reinforce"
+        return "move"
+
+    def _remember_choice(self, move: MoveFeatures, kind: str) -> None:
+        self._recent_choices.append(
+            {
+                "source": (move.row, move.col),
+                "dest": (move.dest_row, move.dest_col),
+                "kind": kind,
+            }
+        )
+        self._recent_action_kinds.append(kind)
+
+    def _score_adjustment(self, observation: Observation, move: MoveFeatures) -> float:
+        score = 0.0
+        dest = (move.dest_row, move.dest_col)
+        source = (move.row, move.col)
+        kind = self._classify_move(move)
+        recent_choices = list(self._recent_choices)
+        recent_kinds = list(self._recent_action_kinds)
+
+        if recent_choices:
+            last = recent_choices[-1]
+            if source == last["dest"] and dest == last["source"]:
+                score -= 28.0
+            if dest == last["source"]:
+                score -= 10.0
+            if dest == last["dest"] and kind in {"reinforce", "reinforce_city"}:
+                score -= 8.0
+
+        if len(recent_choices) >= 4:
+            recent_sources = [choice["source"] for choice in recent_choices[-4:]]
+            recent_dests = [choice["dest"] for choice in recent_choices[-4:]]
+            if dest in recent_sources[-3:] or dest in recent_dests[-3:]:
+                score -= 6.0
+
+        stagnating = len(recent_kinds) >= 4 and all(kind_name in {"reinforce", "reinforce_city"} for kind_name in recent_kinds[-4:])
+        if stagnating:
+            if kind in {"attack", "attack_city", "scout", "expand"} and move.source_army >= 6:
+                score += 16.0
+            if kind in {"reinforce", "reinforce_city"} and move.source_army >= 10:
+                score -= 12.0
+
+        if move.dest_is_owned and move.source_army >= 18:
+            score -= 6.0
+        if move.dest_is_opponent and move.can_capture:
+            score += 8.0
+        if move.dest_is_city and move.can_capture:
+            score += 6.0
+        if move.dest_is_fog and move.source_army >= 6:
+            score += 4.0
+        if self._enemy_general_estimate is not None:
+            source_enemy_dist = abs(move.row - self._enemy_general_estimate[0]) + abs(move.col - self._enemy_general_estimate[1])
+            dest_enemy_dist = self._distance_to_enemy_estimate(move)
+            if dest_enemy_dist < source_enemy_dist and not move.dest_is_owned:
+                score += 3.0
+        if self._current_target is not None:
+            source_target_dist = self._distance_to_target(move.row, move.col)
+            dest_target_dist = self._distance_to_target(move.dest_row, move.dest_col)
+            progress = source_target_dist - dest_target_dist
+            score += 4.5 * progress
+            if progress < 0 and kind in {"reinforce", "reinforce_city"} and move.source_army >= 8:
+                score += 5.0 * progress
+            if progress > 0 and kind in {"attack", "attack_city", "scout", "expand"}:
+                score += 6.0
+            if self._target_kind == "enemy_city" and move.dest_is_city and move.can_capture:
+                score += 18.0
+            if self._target_kind == "enemy_frontier" and move.dest_is_opponent and move.can_capture:
+                score += 14.0
+            if self._target_kind in {"structure_fog", "unseen"} and kind == "scout":
+                score += 10.0
+
+        if self._own_general is not None and move.dest_is_owned:
+            source_home_dist = abs(move.row - self._own_general[0]) + abs(move.col - self._own_general[1])
+            dest_home_dist = self._distance_from_own_general(move)
+            if source_home_dist <= 2 and dest_home_dist <= 2 and move.source_army >= 12:
+                score -= 8.0
+
+        if kind == "expand" and move.source_army < 3:
+            score -= 6.0
+
+        return score
 
 
 class MaterialAdvantageAgent(StrategicAgent):

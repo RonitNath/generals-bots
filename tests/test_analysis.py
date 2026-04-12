@@ -2,9 +2,11 @@ import json
 
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 
 from generals.agents import MaterialAdvantageAgent, ScoutPressureAgent
 from generals.analysis import MatchLogger, analyze_map_fairness, deserialize_game_state, serialize_game_state
+from generals.analysis.anomalies import AnomalyEngine
 from generals.core import game
 from generals.core.env import GeneralsEnv
 
@@ -15,6 +17,15 @@ def create_symmetric_grid(size=5):
     grid = grid.at[size - 1, size - 1].set(2)
     grid = grid.at[1, 1].set(40)
     grid = grid.at[size - 2, size - 2].set(40)
+    return grid
+
+
+def create_close_spawn_grid():
+    grid = jnp.zeros((5, 5), dtype=jnp.int32)
+    grid = grid.at[2, 2].set(1)
+    grid = grid.at[2, 3].set(2)
+    grid = grid.at[0, 0].set(40)
+    grid = grid.at[4, 4].set(40)
     return grid
 
 
@@ -36,6 +47,15 @@ def test_map_fairness_report_contains_score():
     assert "fairness_score" in report
     assert "reject_map" in report
     assert report["fairness_score"] >= 0.0
+
+
+def test_map_fairness_rejects_close_spawns():
+    state = game.create_initial_state(create_close_spawn_grid())
+    report = analyze_map_fairness(state)
+
+    assert report["spawn_distance"] < 8
+    assert report["reject_map"] is True
+    assert "generals spawn too close for realistic openings" in report["warnings"]
 
 
 def test_match_logger_writes_artifacts(tmp_path):
@@ -110,3 +130,48 @@ def test_match_logger_does_not_keyframe_on_loop_noise(tmp_path):
     logger._last_anomaly_keyframe_turn = 10
     assert not logger._should_capture_anomaly_keyframe(15, high_signal, [11.0, 0.0])
     assert logger._should_capture_anomaly_keyframe(18, high_signal, [11.0, 0.0])
+
+
+def test_repeat_path_loop_has_cooldown():
+    engine = AnomalyEngine()
+    observations = []
+    action_kinds = []
+    actions = []
+    debug_snapshots = [None, None]
+    prev_state = {
+        "land": np.array([5, 5]),
+        "army": np.array([20, 20]),
+    }
+    next_state = {
+        "land": np.array([5, 5]),
+        "army": np.array([20, 20]),
+    }
+
+    class StubObs:
+        def __init__(self):
+            self.armies = np.array([[20]])
+            self.owned_cells = np.array([[True]])
+            self.opponent_cells = np.array([[False]])
+            self.neutral_cells = np.array([[False]])
+            self.timestep = 0
+            self.owned_army_count = 20
+            self.opponent_army_count = 20
+            self.owned_land_count = 5
+            self.opponent_land_count = 5
+
+    observations = [StubObs(), StubObs()]
+
+    for turn in range(4):
+        actions = np.array([[0, 0, 0, turn % 2, 0], [0, 0, 0, turn % 2, 0]])
+        action_kinds = [
+            {"pass": False, "kind": "reinforce"},
+            {"pass": False, "kind": "reinforce"},
+        ]
+        detections = engine.detect(turn, observations, actions, action_kinds, prev_state, next_state, debug_snapshots)
+    assert any(d["type"] == "repeat_path_loop" for d in detections)
+
+    detections = engine.detect(5, observations, np.array([[0, 0, 0, 0, 0], [0, 0, 0, 0, 0]]), action_kinds, prev_state, next_state, debug_snapshots)
+    assert not any(d["type"] == "repeat_path_loop" for d in detections)
+
+    detections = engine.detect(14, observations, np.array([[0, 0, 0, 1, 0], [0, 0, 0, 1, 0]]), action_kinds, prev_state, next_state, debug_snapshots)
+    assert any(d["type"] == "repeat_path_loop" for d in detections)
