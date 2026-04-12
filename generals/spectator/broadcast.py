@@ -100,6 +100,7 @@ class SpectatorBroadcast:
         return Response(200, "OK", websockets.Headers({
             "Content-Type": "text/html; charset=utf-8",
             "Content-Length": str(len(self._html)),
+            "Cache-Control": "no-cache, no-store, must-revalidate",
         }), self._html)
 
     async def _ws_handler(self, ws: websockets.ServerConnection):
