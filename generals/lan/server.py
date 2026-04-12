@@ -1,9 +1,9 @@
 """
 LAN game server for head-to-head agent competition.
 
-Hosts the game engine and GUI. Two clients connect over TCP,
-each running their own agent. The server sends observations
-and collects actions each turn.
+Hosts the game engine. Two clients connect over TCP, each running their
+own agent. A web-based spectator UI is served on a separate port for
+display on a TV or any browser.
 
 Usage:
     server = LANServer(env)
@@ -14,13 +14,11 @@ import socket
 import time
 from collections import Counter
 
-import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
 from generals.core.env import GeneralsEnv
 from generals.core.game import get_observation
-from generals.gui.replay_gui import ReplayGUI
 
 from .protocol import (
     PASS_ACTION,
@@ -28,6 +26,9 @@ from .protocol import (
     send_msg,
     serialize_observation,
 )
+
+# Default player colors (RGB)
+DEFAULT_COLORS = [[220, 56, 56], [56, 120, 220]]
 
 
 class LANServer:
@@ -38,20 +39,40 @@ class LANServer:
         port: int = 5555,
         action_timeout: float = 2.0,
         fps: int = 6,
+        spectator_port: int = 8080,
+        no_spectator: bool = False,
+        colors: list[list[int]] | None = None,
     ):
         """
         Args:
             env: Game environment configuration.
             host: Address to bind (0.0.0.0 for all interfaces).
-            port: TCP port.
+            port: TCP port for agent connections.
             action_timeout: Seconds to wait for each player's action before substituting a pass.
-            fps: GUI frames per second.
+            fps: Game ticks per second.
+            spectator_port: HTTP/WebSocket port for the spectator UI.
+            no_spectator: If True, run headless without the spectator UI.
+            colors: Player colors as [[r,g,b], [r,g,b]].
         """
         self.env = env
         self.host = host
         self.port = port
         self.action_timeout = action_timeout
         self.fps = fps
+        self.spectator_port = spectator_port
+        self.no_spectator = no_spectator
+        self.colors = colors or DEFAULT_COLORS
+
+    def _get_server_ip(self) -> str:
+        """Best-effort LAN IP for display purposes."""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "localhost"
 
     def run(self, seed: int = 42, num_games: int | None = None):
         """
@@ -61,23 +82,33 @@ class LANServer:
             seed: Random seed for game generation.
             num_games: Number of games to play. None = infinite.
         """
+        # Start spectator broadcast
+        spectator = None
+        if not self.no_spectator:
+            from generals.spectator import SpectatorBroadcast
+            spectator = SpectatorBroadcast(host=self.host, port=self.spectator_port)
+            print(f"Spectator UI at http://localhost:{self.spectator_port}")
+
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((self.host, self.port))
         srv.listen(2)
         print(f"LAN Server listening on {self.host}:{self.port}")
 
+        server_ip = self._get_server_ip()
+
+        if spectator:
+            spectator.set_lobby([], server_ip)
+
         # Accept two players
-        clients, agent_ids = self._accept_players(srv)
+        clients, agent_ids = self._accept_players(srv, spectator, server_ip)
 
         key = jrandom.PRNGKey(seed)
         game_num = 0
-        # Track which client is player 0 vs 1 (swap each game for fairness)
         assignment = [0, 1]
         match_score: Counter[str] = Counter()
         draws = 0
-
-        gui = None
+        tick_interval = 1.0 / self.fps
 
         try:
             while num_games is None or game_num < num_games:
@@ -102,19 +133,16 @@ class LANServer:
                         "game_num": game_num,
                     })
 
-                # Create or reset GUI
-                if gui is None:
-                    gui = ReplayGUI(state, agent_ids=[p0_name, p1_name], fps=self.fps)
-                else:
-                    gui._adapter.update_from_state(state)
-                    gui.agent_ids = [p0_name, p1_name]
+                if spectator:
+                    spectator.game_start(state, [p0_name, p1_name], self.colors, game_num)
 
                 # Game loop
                 terminated = truncated = False
                 turn = 0
 
                 while not (terminated or truncated):
-                    # Compute and send observations
+                    tick_start = time.monotonic()
+
                     obs_0 = get_observation(state, 0)
                     obs_1 = get_observation(state, 1)
 
@@ -133,7 +161,6 @@ class LANServer:
                         print(f"Client disconnected during send: {e}")
                         break
 
-                    # Collect actions from both players
                     actions = [None, None]
                     for i in range(2):
                         actions[i] = self._recv_action(clients[assignment[i]], agent_ids[assignment[i]])
@@ -141,12 +168,18 @@ class LANServer:
                     stacked = jnp.stack([jnp.array(a, dtype=jnp.int32) for a in actions])
                     timestep, state = self.env.step(state, stacked, pool)
 
-                    gui.update(state, timestep.info)
-                    gui.tick(fps=self.fps)
+                    if spectator:
+                        spectator.broadcast_state(state, timestep.info)
 
                     terminated = bool(timestep.terminated)
                     truncated = bool(timestep.truncated)
                     turn += 1
+
+                    # Pace to target FPS
+                    elapsed = time.monotonic() - tick_start
+                    remaining = tick_interval - elapsed
+                    if remaining > 0:
+                        time.sleep(remaining)
 
                 # Determine winner
                 winner_idx = int(timestep.info.winner)
@@ -159,6 +192,12 @@ class LANServer:
                     draws += 1
                     print(f"Game {game_num} truncated after {turn} turns. Draw.")
 
+                score = {
+                    agent_ids[0]: match_score[agent_ids[0]],
+                    agent_ids[1]: match_score[agent_ids[1]],
+                    "draws": draws,
+                }
+
                 print(
                     "Match score: "
                     f"{agent_ids[0]}={match_score[agent_ids[0]]}, "
@@ -166,7 +205,7 @@ class LANServer:
                     f"draws={draws}"
                 )
 
-                # Send game_end
+                # Send game_end to clients
                 for i in range(2):
                     try:
                         send_msg(clients[assignment[i]], {
@@ -175,17 +214,19 @@ class LANServer:
                             "winner_name": winner_name,
                             "turns": turn,
                             "game_num": game_num,
-                            "score": {
-                                agent_ids[0]: match_score[agent_ids[0]],
-                                agent_ids[1]: match_score[agent_ids[1]],
-                                "draws": draws,
-                            },
+                            "score": score,
                         })
                     except ConnectionError:
                         pass
 
-                # Pause briefly so players can see the final state
-                time.sleep(2)
+                if spectator:
+                    spectator.game_end(winner_idx, winner_name, turn, game_num, score)
+
+                # Countdown between games
+                for s in range(5, 0, -1):
+                    if spectator:
+                        spectator.countdown(s, game_num + 1)
+                    time.sleep(1)
 
                 # Swap player assignments for fairness
                 assignment = [assignment[1], assignment[0]]
@@ -196,10 +237,10 @@ class LANServer:
             for c in clients:
                 c.close()
             srv.close()
-            if gui is not None:
-                gui.close()
+            if spectator:
+                spectator.shutdown()
 
-    def _accept_players(self, srv: socket.socket) -> tuple[list[socket.socket], list[str]]:
+    def _accept_players(self, srv: socket.socket, spectator=None, server_ip: str = "") -> tuple[list[socket.socket], list[str]]:
         """Wait for two clients to connect and send their join messages."""
         clients = []
         agent_ids = []
@@ -217,6 +258,8 @@ class LANServer:
             clients.append(conn)
             agent_ids.append(name)
             print(f"  Player {i + 1} connected: {name} from {addr[0]}:{addr[1]}")
+            if spectator:
+                spectator.set_lobby(list(agent_ids), server_ip)
         return clients, agent_ids
 
     def _recv_action(self, sock: socket.socket, name: str) -> list[int]:

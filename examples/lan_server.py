@@ -1,7 +1,8 @@
 """
-Start a LAN game server with GUI.
+Start a LAN game server with web spectator UI.
 
 Both players connect as clients from their own machines.
+Open http://localhost:8080 in a browser to watch the game.
 
 Usage:
     uv run python examples/lan_server.py
@@ -22,8 +23,18 @@ parser.add_argument("--truncation", type=int, default=500)
 parser.add_argument("--timeout", type=float, default=2.0, help="Action timeout (seconds)")
 parser.add_argument("--fps", type=int, default=6)
 parser.add_argument("--games", type=int, default=None, help="Number of games (default: infinite)")
+parser.add_argument("--spectator-port", type=int, default=8080, help="HTTP/WebSocket port for spectator UI")
+parser.add_argument("--no-spectator", action="store_true", help="Disable web spectator UI")
 args = parser.parse_args()
 
 env = GeneralsEnv(grid_dims=(args.grid, args.grid), truncation=args.truncation)
-server = LANServer(env, host=args.host, port=args.port, action_timeout=args.timeout, fps=args.fps)
+server = LANServer(
+    env,
+    host=args.host,
+    port=args.port,
+    action_timeout=args.timeout,
+    fps=args.fps,
+    spectator_port=args.spectator_port,
+    no_spectator=args.no_spectator,
+)
 server.run(seed=args.seed, num_games=args.games)

@@ -12,6 +12,7 @@ dependencies = [
     "python-socketio[client]>=5.11.4",
     "jax>=0.4.30",
     "jaxlib>=0.4.30",
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]
