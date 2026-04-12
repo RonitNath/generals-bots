@@ -254,64 +254,61 @@
   }
   .settings-badge span { color: var(--text); font-weight: 700; }
 
-  /* --- LEADERBOARD --- */
+  /* --- LEADERBOARD (lobby: centered, game: fixed sidebar) --- */
   .leaderboard {
     margin-top: 40px;
     width: 520px;
   }
-  .leaderboard h2 {
-    font-size: 14px;
+  .leaderboard-fixed {
+    position: fixed;
+    top: 80px;
+    right: 12px;
+    width: 280px;
+    z-index: 50;
+    background: rgba(18, 21, 28, 0.92);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 0 6px;
+  }
+  .leaderboard h2, .leaderboard-fixed h2 {
+    font-size: 11px;
     letter-spacing: 4px;
     text-transform: uppercase;
     color: var(--text-dim);
-    margin-bottom: 12px;
+    margin-bottom: 8px;
     text-align: center;
   }
   .lb-table {
     width: 100%;
     border-collapse: collapse;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
+    font-size: 13px;
   }
   .lb-table th {
     color: var(--text-dim);
     font-weight: 400;
-    font-size: 11px;
+    font-size: 10px;
     letter-spacing: 2px;
     text-transform: uppercase;
-    padding: 6px 12px;
+    padding: 4px 8px;
     text-align: left;
     border-bottom: 1px solid var(--border);
   }
   .lb-table th:not(:first-child) { text-align: center; }
   .lb-table td {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border);
+    padding: 5px 8px;
+    border-bottom: 1px solid rgba(30, 35, 48, 0.5);
   }
   .lb-table td:not(:first-child) { text-align: center; color: var(--text-dim); }
   .lb-table td:first-child { font-weight: 700; color: var(--text); }
-  .lb-rank { color: var(--text-dim); font-weight: 400; margin-right: 8px; }
+  .lb-rank { color: var(--text-dim); font-weight: 400; margin-right: 6px; }
   .lb-wins { color: #5cb85c !important; font-weight: 700 !important; }
   .lb-losses { color: #d9534f !important; }
+  .lb-last-winner td { background: rgba(92, 184, 92, 0.08); }
 
-  /* --- LAST WINNER BADGE --- */
-  .last-winner {
-    position: fixed;
-    bottom: 16px;
-    left: 20px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--text-dim);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 6px 12px;
-    z-index: 50;
-  }
-  .last-winner .winner-badge-name {
-    font-weight: 700;
-    margin-left: 4px;
-  }
+  .leaderboard .lb-table { font-size: 14px; }
+  .leaderboard .lb-table th { padding: 6px 12px; }
+  .leaderboard .lb-table td { padding: 8px 12px; }
 
   @keyframes slideUp {
     from { transform: translateY(30px); opacity: 0; }
@@ -383,8 +380,12 @@
   </div>
 </div>
 
-<div class="last-winner" id="lastWinner" style="display:none">
-  PREV <span class="winner-badge-name" id="lastWinnerName">--</span>
+<div class="leaderboard-fixed" id="leaderboardFixed" style="display:none">
+  <h2>Leaderboard</h2>
+  <table class="lb-table">
+    <thead><tr><th>Agent</th><th>W</th><th>L</th><th>D</th></tr></thead>
+    <tbody id="lbBodyFixed"></tbody>
+  </table>
 </div>
 
 <div class="settings-badge" id="settingsBadge" style="display:none">
@@ -582,15 +583,20 @@ function updateSeriesDisplay() {
   el.innerHTML = `<span class="wins" style="color:${rgb(colors[0])}">${s0}</span> - <span class="wins" style="color:${rgb(colors[1])}">${s1}</span>`;
 }
 
+let lastLeaderboardData = null;
+
 function updateLeaderboard(msg) {
-  const tbody = document.getElementById('lbBody');
+  lastLeaderboardData = msg;
   const rankings = msg.rankings || [];
   const lastGame = msg.last_game;
+  const lastWinner = lastGame ? lastGame.winner : null;
 
+  // Lobby leaderboard (full, with Games column)
   if (rankings.length > 0) {
     document.getElementById('leaderboard').style.display = '';
-    tbody.innerHTML = rankings.map((r, i) => {
-      return `<tr>
+    document.getElementById('lbBody').innerHTML = rankings.map((r, i) => {
+      const isLastWinner = r.name === lastWinner;
+      return `<tr${isLastWinner ? ' class="lb-last-winner"' : ''}>
         <td><span class="lb-rank">${i+1}.</span>${r.name}</td>
         <td class="lb-wins">${r.wins}</td>
         <td class="lb-losses">${r.losses}</td>
@@ -600,17 +606,18 @@ function updateLeaderboard(msg) {
     }).join('');
   }
 
-  // Update last-winner badge
-  const badge = document.getElementById('lastWinner');
-  const nameEl = document.getElementById('lastWinnerName');
-  if (lastGame && lastGame.winner) {
-    nameEl.textContent = lastGame.winner;
-    badge.style.display = '';
-  } else if (lastGame) {
-    nameEl.textContent = 'Draw';
-    badge.style.display = '';
-  } else {
-    badge.style.display = 'none';
+  // Fixed sidebar leaderboard (compact, no Games column)
+  if (rankings.length > 0) {
+    document.getElementById('leaderboardFixed').style.display = '';
+    document.getElementById('lbBodyFixed').innerHTML = rankings.map((r, i) => {
+      const isLastWinner = r.name === lastWinner;
+      return `<tr${isLastWinner ? ' class="lb-last-winner"' : ''}>
+        <td><span class="lb-rank">${i+1}.</span>${r.name}</td>
+        <td class="lb-wins">${r.wins}</td>
+        <td class="lb-losses">${r.losses}</td>
+        <td>${r.draws}</td>
+      </tr>`;
+    }).join('');
   }
 }
 
