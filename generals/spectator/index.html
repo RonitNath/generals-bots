@@ -439,12 +439,25 @@ function showGameEnd(msg) {
   if (msg.winner >= 0 && msg.winner_name) {
     nameEl.textContent = msg.winner_name;
     nameEl.style.color = rgb(colors[msg.winner]);
-    statsEl.textContent = `${msg.turns} turns`;
+    // Show final stats if we have them
+    let statsText = `${msg.turns} turns`;
+    if (gameState && gameState.stats) {
+      const w = msg.winner;
+      const l = 1 - w;
+      statsText += `  ·  ${gameState.stats[w].army} army / ${gameState.stats[w].land} land`;
+      statsText += `  vs  ${gameState.stats[l].army} / ${gameState.stats[l].land}`;
+    }
+    statsEl.textContent = statsText;
   } else {
     nameEl.textContent = 'Draw';
     nameEl.style.color = 'var(--text-dim)';
     statsEl.textContent = `${msg.turns} turns (truncated)`;
   }
+  // Re-trigger animation
+  const card = document.querySelector('.winner-card');
+  card.style.animation = 'none';
+  void card.offsetHeight;
+  card.style.animation = '';
   overlay.classList.add('visible');
 }
 
@@ -497,8 +510,10 @@ function renderGrid() {
   if (!gameStart) return;
   const [H, W] = gameStart.grid_dims;
   const mountains = gameStart.mountains;
-  const cities = gameStart.cities;
-  const generals = gameStart.generals;
+  // Use live data for generals/cities (they change on capture), fall back to static
+  const cities = gameState?.cities || gameStart.cities;
+  const generals = gameState?.generals || gameStart.generals;
+  const neutralOwnership = gameState?.ownership_neutral || null;
   const armies = gameState ? gameState.armies : null;
   const ownership = gameState ? gameState.ownership : null;
   const cs = cellSize;
@@ -513,44 +528,61 @@ function renderGrid() {
       const isCity = cities[r][c];
       const isGen = generals[r][c];
       const owner = ownership ? (ownership[0][r][c] ? 0 : ownership[1][r][c] ? 1 : -1) : -1;
+      const isNeutral = neutralOwnership ? neutralOwnership[r][c] : (owner < 0);
 
-      // Cell background
+      // --- Cell background ---
       if (isMtn) {
         ctx.fillStyle = '#3a3d48';
       } else if (owner >= 0) {
         ctx.fillStyle = rgb(colors[owner]);
-      } else if (isCity) {
+      } else if (isCity && isNeutral) {
         ctx.fillStyle = '#6a6e78';
       } else {
         ctx.fillStyle = '#22252e';
       }
       ctx.fillRect(x, y, cs, cs);
 
-      // Grid line
+      // --- Grid line ---
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, cs - 1, cs - 1);
 
-      // Icons
-      const iconSize = Math.floor(cs * 0.65);
-      const iconOff = Math.floor((cs - iconSize) / 2);
-      if (isGen) {
-        ctx.drawImage(ASSETS.general, x + iconOff, y + iconOff, iconSize, iconSize);
-      } else if (isCity) {
-        ctx.drawImage(ASSETS.city, x + iconOff, y + iconOff, iconSize, iconSize);
-      } else if (isMtn) {
-        ctx.drawImage(ASSETS.mountain, x + iconOff, y + iconOff, iconSize, iconSize);
+      // --- Icons (drawn smaller and top-right so they don't obscure the army number) ---
+      const hasIcon = isGen || isCity || isMtn;
+      if (hasIcon) {
+        let icon;
+        if (isGen) icon = ASSETS.general;
+        else if (isCity) icon = ASSETS.city;
+        else icon = ASSETS.mountain;
+
+        if (armies && armies[r][c] > 0 && !isMtn) {
+          // Cell has troops — draw icon small in top-right corner
+          const smallSize = Math.floor(cs * 0.35);
+          const pad = Math.max(2, Math.floor(cs * 0.05));
+          ctx.globalAlpha = 0.7;
+          ctx.drawImage(icon, x + cs - smallSize - pad, y + pad, smallSize, smallSize);
+          ctx.globalAlpha = 1.0;
+        } else {
+          // Empty structure or mountain — draw icon centered and large
+          const iconSize = Math.floor(cs * 0.6);
+          const iconOff = Math.floor((cs - iconSize) / 2);
+          ctx.drawImage(icon, x + iconOff, y + iconOff, iconSize, iconSize);
+        }
       }
 
-      // Army number
+      // --- Army number ---
       if (armies && armies[r][c] > 0) {
         const num = armies[r][c];
-        const fontSize = num >= 100 ? Math.floor(cs * 0.32) : Math.floor(cs * 0.38);
+        const fontSize = num >= 1000 ? Math.floor(cs * 0.26)
+                       : num >= 100  ? Math.floor(cs * 0.32)
+                       :               Math.floor(cs * 0.40);
         ctx.font = `700 ${fontSize}px 'JetBrains Mono', monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+        // Black outline for readability on any background
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
         ctx.lineWidth = 3;
+        ctx.lineJoin = 'round';
         ctx.strokeText(num, x + cs / 2, y + cs / 2);
         ctx.fillStyle = '#fff';
         ctx.fillText(num, x + cs / 2, y + cs / 2);

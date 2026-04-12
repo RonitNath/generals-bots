@@ -41,6 +41,10 @@ def _serialize_state(state: GameState, info: GameInfo) -> dict:
         "turn": int(state.time),
         "armies": np.array(state.armies).tolist(),
         "ownership": np.array(state.ownership).astype(int).tolist(),
+        # Generals and cities can change mid-game (capture), send each frame
+        "generals": np.array(state.generals).astype(int).tolist(),
+        "cities": np.array(state.cities).astype(int).tolist(),
+        "ownership_neutral": np.array(state.ownership_neutral).astype(int).tolist(),
         "stats": [
             {"army": int(info.army[i]), "land": int(info.land[i])}
             for i in range(2)
