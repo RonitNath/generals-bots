@@ -2,15 +2,15 @@
 Connect an agent to a LAN game server.
 
 Usage:
-    python examples/lan_client.py --host 192.168.1.10
-    python examples/lan_client.py --host localhost --agent expander
+    uv run python examples/lan_client.py --host 192.168.1.10 --name RonitBot
+    uv run python examples/lan_client.py --host localhost --agent expander
 
 Swap the agent below with your own implementation!
 """
 
 import argparse
 
-from generals.agents import ExpanderAgent, RandomAgent
+from generals.agents import ExpanderAgent, RandomAgent, build_agent
 from generals.lan import LANClient
 
 parser = argparse.ArgumentParser(description="Generals LAN Client")
@@ -18,13 +18,22 @@ parser.add_argument("--host", type=str, default="localhost")
 parser.add_argument("--port", type=int, default=5555)
 parser.add_argument("--agent", type=str, default="expander", choices=["expander", "random"],
                     help="Built-in agent to use (or replace this script with your own)")
+parser.add_argument(
+    "--agent-custom",
+    type=str,
+    default=None,
+    help="Custom agent target: 'python.module:factory' or '/path/to/file.py:factory'",
+)
 parser.add_argument("--name", type=str, default=None, help="Display name for your agent")
+parser.add_argument("--seed", type=int, default=None, help="Optional JAX seed for reproducible agent behavior")
 args = parser.parse_args()
 
-if args.agent == "expander":
+if args.agent_custom:
+    agent = build_agent(args.agent_custom, name=args.name)
+elif args.agent == "expander":
     agent = ExpanderAgent(id=args.name or "Expander")
 elif args.agent == "random":
     agent = RandomAgent(id=args.name or "Random")
 
 client = LANClient(agent, host=args.host, port=args.port)
-client.run()
+client.run(seed=args.seed)

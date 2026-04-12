@@ -1,6 +1,7 @@
 import time
 
 import numpy as np
+import jax.random as jrandom
 from socketio import SimpleClient  # type: ignore
 
 from generals.agents import Agent
@@ -39,6 +40,7 @@ class GeneralsIOClient(SimpleClient):
         self.public_server = public_server
         self.user_id = user_id
         self.agent = agent
+        self._key = jrandom.PRNGKey(int(time.time() * 1000) % (2**31))
         self._queue_id = ""
         self._replay_id = ""
         self._status = "off"  # can be "off","game","lobby","queue"
@@ -135,6 +137,7 @@ class GeneralsIOClient(SimpleClient):
         """
         self.game_state = GeneralsIOstate(data[0])
         self._replay_id = data[0]["replay_id"]
+        self.agent.reset()
         print("Game started!")
 
     def _generate_action(self, observation: Observation) -> tuple[int, int, int] | None:
@@ -143,7 +146,8 @@ class GeneralsIOClient(SimpleClient):
         :param action: dictionary representing the action
         If your agent passes actions correctly into our simulator, it will work here too.
         """
-        action = self.agent.act(observation)
+        self._key, act_key = jrandom.split(self._key)
+        action = self.agent.act(observation, act_key)
         pass_or_play = action[0]
         i, j = action[1], action[2]
         direction = action[3]

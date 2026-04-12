@@ -12,6 +12,7 @@ Usage:
 
 import socket
 import time
+from collections import Counter
 
 import jax
 import jax.numpy as jnp
@@ -73,6 +74,8 @@ class LANServer:
         game_num = 0
         # Track which client is player 0 vs 1 (swap each game for fairness)
         assignment = [0, 1]
+        match_score: Counter[str] = Counter()
+        draws = 0
 
         gui = None
 
@@ -93,6 +96,8 @@ class LANServer:
                     send_msg(clients[assignment[i]], {
                         "type": "game_start",
                         "player_id": i,
+                        "player_name": [p0_name, p1_name][i],
+                        "opponent_name": [p1_name, p0_name][i],
                         "grid_dims": grid_dims,
                         "game_num": game_num,
                     })
@@ -147,10 +152,19 @@ class LANServer:
                 winner_idx = int(timestep.info.winner)
                 if winner_idx >= 0:
                     winner_name = [p0_name, p1_name][winner_idx]
+                    match_score[winner_name] += 1
                     print(f"Game {game_num} over after {turn} turns. Winner: {winner_name}")
                 else:
                     winner_name = None
+                    draws += 1
                     print(f"Game {game_num} truncated after {turn} turns. Draw.")
+
+                print(
+                    "Match score: "
+                    f"{agent_ids[0]}={match_score[agent_ids[0]]}, "
+                    f"{agent_ids[1]}={match_score[agent_ids[1]]}, "
+                    f"draws={draws}"
+                )
 
                 # Send game_end
                 for i in range(2):
@@ -161,6 +175,11 @@ class LANServer:
                             "winner_name": winner_name,
                             "turns": turn,
                             "game_num": game_num,
+                            "score": {
+                                agent_ids[0]: match_score[agent_ids[0]],
+                                agent_ids[1]: match_score[agent_ids[1]],
+                                "draws": draws,
+                            },
                         })
                     except ConnectionError:
                         pass

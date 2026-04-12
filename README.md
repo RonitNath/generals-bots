@@ -24,7 +24,7 @@ A high-performance JAX-based simulator for [generals.io](https://generals.io), d
 ```bash
 git clone https://github.com/strakam/generals-bots
 cd generals-bots
-pip install -e .
+uv sync --extra dev
 ```
 
 ## 🌱 Getting Started
@@ -47,7 +47,7 @@ agent_1 = ExpanderAgent()
 
 # Initialize
 key = jrandom.PRNGKey(42)
-state = env.reset(key)
+pool, state = env.reset(key)
 
 # Game loop
 while True:
@@ -62,7 +62,7 @@ while True:
     actions = jnp.stack([action_0, action_1])
 
     # Step environment (auto-resets from pre-generated pool)
-    timestep, state = env.step(state, actions)
+    timestep, state = env.step(state, actions, pool)
 
     if timestep.terminated or timestep.truncated:
         break
@@ -86,14 +86,14 @@ env = GeneralsEnv(grid_dims=(10, 10), truncation=500)
 NUM_ENVS = 1024
 key = jrandom.PRNGKey(0)
 key, pool_key = jrandom.split(key)
-env.reset(pool_key)  # generates shared pool
+pool, _ = env.reset(pool_key)  # generates shared pool
 
 keys = jrandom.split(key, NUM_ENVS)
 states = jax.vmap(env.init_state)(keys)  # Batched states
 
 # Step all environments in parallel (auto-resets from pool)
 # ... get batched observations and actions ...
-timesteps, states = jax.vmap(env.step)(states, actions)
+timesteps, states = jax.vmap(lambda s, a: env.step(s, a, pool))(states, actions)
 ```
 
 See `examples/vectorized_example.py` for a complete example.
@@ -155,6 +155,64 @@ autopilot(agent, user_id="your_user_id", lobby_id="your_lobby")
 ```
 
 Register at [generals.io](https://generals.io) to get your user ID.
+
+## 🖥️ LAN Battles
+
+For a local bot arena, run the server on the TV machine and connect two laptops as clients over the same network.
+
+Start the server:
+
+```bash
+uv run python examples/lan_server.py --host 0.0.0.0 --port 5555 --grid 15 --games 10
+```
+
+Connect a client from each laptop:
+
+```bash
+uv run python examples/lan_client.py --host <server-lan-ip> --port 5555 --agent expander --name AliceBot
+uv run python examples/lan_client.py --host <server-lan-ip> --port 5555 --agent random --name BobBot
+```
+
+The server runs the authoritative environment and rotates player sides each game for fairness. Clients only receive observations and send back actions, which makes it a good fit for developing agents independently on separate laptops.
+
+## 🤖 Building Agents
+
+Each laptop can run a custom agent module without editing the shared LAN client script.
+
+Create an agent factory that returns an `Agent`:
+
+```python
+from generals.agents import Agent
+
+class MyAgent(Agent):
+    def act(self, observation, key):
+        ...
+
+def make_agent(name: str) -> Agent:
+    return MyAgent(id=name)
+```
+
+Then connect it to the server:
+
+```bash
+uv run python examples/lan_client.py \
+  --host <server-lan-ip> \
+  --agent-custom examples/custom_agent.py:make_agent \
+  --name AliceBot
+```
+
+`--agent-custom` accepts either:
+- `python.module:factory`
+- `/path/to/file.py:factory`
+
+## 👥 Friend Workflow
+
+Recommended setup for sharing this repo:
+
+1. Commit the shared platform code, including the LAN server, examples, and spectator work.
+2. Each of you creates your own agent module locally and connects it with `--agent-custom`.
+3. Use `uv run --extra dev pytest` before sharing changes back.
+4. Keep spectator/UI work and agent-strategy work in separate branches so they do not conflict.
 
 ## 📄 Citation
 

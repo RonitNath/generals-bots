@@ -61,9 +61,15 @@ class LANClient:
 
                 if msg["type"] == "game_start":
                     player_id = msg["player_id"]
+                    player_name = msg.get("player_name", self.agent.id)
+                    opponent_name = msg.get("opponent_name", "Opponent")
                     grid_dims = msg["grid_dims"]
                     game_num = msg["game_num"]
-                    print(f"\nGame {game_num} starting — you are Player {player_id} on {grid_dims[0]}x{grid_dims[1]}")
+                    print(
+                        f"\nGame {game_num} starting — "
+                        f"you are Player {player_id} ({player_name}) vs {opponent_name} "
+                        f"on {grid_dims[0]}x{grid_dims[1]}"
+                    )
                     self.agent.reset()
 
                 elif msg["type"] == "observation":
@@ -79,12 +85,15 @@ class LANClient:
                     winner = msg["winner"]
                     winner_name = msg.get("winner_name", "???")
                     turns = msg["turns"]
+                    score = msg.get("score", {})
                     if winner == player_id:
                         print(f"Game {msg['game_num']} — YOU WON in {turns} turns!")
                     elif winner < 0:
                         print(f"Game {msg['game_num']} — DRAW after {turns} turns.")
                     else:
                         print(f"Game {msg['game_num']} — You lost. Winner: {winner_name} ({turns} turns)")
+                    if score:
+                        print(f"Match score: {score}")
 
         except ConnectionError:
             print("Disconnected from server.")

@@ -40,7 +40,7 @@ def test_create_initial_state():
 
 
 def test_step_pass_action():
-    """Test that pass actions don't change state."""
+    """Test that pass actions still trigger the turn-level structure growth."""
     grid = create_test_grid(2)
     state = game.create_initial_state(grid)
 
@@ -55,8 +55,9 @@ def test_step_pass_action():
 
     new_state, info = game.step(state, actions)
 
-    # Armies should not change (except time increment)
-    assert jnp.array_equal(new_state.armies, state.armies)
+    # Time advances to 1, so both generals gain 1 army from structure growth.
+    assert int(new_state.armies[0, 0]) == 2
+    assert int(new_state.armies[1, 1]) == 2
     assert new_state.time == 1
     assert new_state.winner == -1
 
@@ -80,8 +81,8 @@ def test_step_move_to_neutral():
 
     new_state, info = game.step(state, actions)
 
-    # Check armies moved
-    assert new_state.armies[0, 0] == 1  # Left 1 behind
+    # Source remains a general, so it gains +1 on the global update at turn 1.
+    assert new_state.armies[0, 0] == 2
     assert new_state.armies[0, 1] == 4  # Moved 4
 
     # Check ownership changed
@@ -111,8 +112,8 @@ def test_step_move_to_own_cell():
 
     new_state, info = game.step(state, actions)
 
-    # Armies should merge
-    assert new_state.armies[0, 0] == 1  # Left 1 behind
+    # Source remains a general, so it gains +1 on the global update at turn 1.
+    assert new_state.armies[0, 0] == 2
     assert new_state.armies[0, 1] == 7  # 3 + 4 moved
 
 
@@ -140,10 +141,10 @@ def test_global_update():
     """Test global army increment mechanics."""
     grid = create_test_grid(2)
     state = game.create_initial_state(grid)
-    state = state._replace(armies=state.armies.at[0, 0].set(5), time=jnp.int32(2))
+    state = state._replace(armies=state.armies.at[0, 0].set(5), time=jnp.int32(1))
     state = game.global_update(state)
 
-    # General should have gained 1 army
+    # Structures grow on odd-numbered turns.
     assert state.armies[0, 0] == 6
 
 

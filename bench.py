@@ -46,11 +46,11 @@ env = GeneralsEnv(grid_dims=GRID, truncation=500, pool_size=POOL_SIZE)
 
 t0 = time.perf_counter()
 key = jrandom.PRNGKey(0)
-state = env.reset(key)
-jax.block_until_ready(jax.tree.leaves(env._pool))
+pool, state = env.reset(key)
+jax.block_until_ready(jax.tree.leaves(pool))
 pool_time = time.perf_counter() - t0
 
-pool_bytes = sum(x.nbytes for x in jax.tree.leaves(env._pool))
+pool_bytes = sum(x.nbytes for x in jax.tree.leaves(pool))
 pool_mb = pool_bytes / 1024 / 1024
 per_state = pool_bytes / POOL_SIZE
 
@@ -67,7 +67,7 @@ STEPS_SINGLE = 500
 
 @jax.jit
 def single_step(state, actions):
-    return env.step(state, actions)
+    return env.step(state, actions, pool)
 
 # Full loop with observation + random agent
 key = jrandom.PRNGKey(1)
@@ -130,7 +130,7 @@ init_states = jax.vmap(env.init_state)(init_keys)
 @jax.jit
 def scan_env_step(states):
     def body(states, _):
-        ts, new_states = jax.vmap(env.step)(states, actions_batch)
+        ts, new_states = jax.vmap(lambda s, a: env.step(s, a, pool))(states, actions_batch)
         return new_states, None
     final, _ = jax.lax.scan(body, states, None, length=N_SCAN)
     return final

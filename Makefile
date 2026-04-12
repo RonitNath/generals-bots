@@ -1,44 +1,32 @@
-.PHONY: test build clean
+.PHONY: test build clean lan_server lan_client
 
-# Install package
 install:
-	pip install poetry==1.8.4
-	poetry install --with dev
+	uv sync --extra dev
 
-# Run PettingZoo example
-pz:
-	poetry run python3 -m examples.pettingzoo_example
+lan_server:
+	uv run python examples/lan_server.py
 
-# Run Gymnasium example
-gym:
-	poetry run python3 -m examples.gymnasium_example
+lan_client:
+	uv run python examples/lan_client.py
 
 remote:
-	poetry run python3 -m examples.client_example
-# Create new replay and run it
-make n_replay:
-	poetry run python3 -m examples.record_replay_example
-	poetry run python3 -m examples.show_replay_example
-
-# Run existing replay
-replay:
-	poetry run python3 -m examples.show_replay_example
+	uv run python -m examples.client_example
 
 ###################
 # Developer tools #
 ###################
 
 test_performance:
-	poetry run python3 -m tests.parallel_api_check
+	uv run --extra dev python -m tests.test_performance
 
 test:
-	poetry run pytest
+	uv run --extra dev pytest
 
 pc:
-	poetry run pre-commit run --all-files
+	uv run --extra dev ruff check .
 
 build:
-	poetry build
+	uv build
 
 clean:
 	rm -rf build dist *.egg-info
