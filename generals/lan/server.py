@@ -41,7 +41,8 @@ from .protocol import (
 # Default player colors (RGB)
 DEFAULT_COLORS = [[220, 56, 56], [56, 120, 220]]
 
-LEADERBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "leaderboard.json")
+_DATA_DIR = os.path.join(os.path.expanduser("~"), ".generals")
+LEADERBOARD_PATH = os.path.join(_DATA_DIR, "leaderboard.json")
 
 
 class Leaderboard:
@@ -49,6 +50,7 @@ class Leaderboard:
 
     def __init__(self, path: str = LEADERBOARD_PATH):
         self._path = os.path.abspath(path)
+        os.makedirs(os.path.dirname(self._path), exist_ok=True)
         self._data: dict[str, dict] = {}  # {agent_name: {wins, losses, draws, games}}
         self._history: list[dict] = []    # recent game results
         self._load()
@@ -91,16 +93,24 @@ class Leaderboard:
             "winner": winner_name, "turns": turns,
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
         })
-        # Keep last 100 games
-        self._history = self._history[-100:]
+        # Keep last 1000 games
+        self._history = self._history[-1000:]
         self._save()
 
     def to_dict(self) -> dict:
-        """Leaderboard sorted by wins desc, for broadcast."""
-        ranked = sorted(self._data.items(), key=lambda x: (-x[1]["wins"], x[1]["losses"]))
+        """Leaderboard sorted by win rate (min 1 game), then wins desc."""
+        def sort_key(item):
+            s = item[1]
+            rate = s["wins"] / s["games"] if s["games"] > 0 else 0
+            return (-rate, -s["wins"], s["losses"])
+        ranked = sorted(self._data.items(), key=sort_key)
         return {
-            "rankings": [{"name": n, **s} for n, s in ranked],
+            "rankings": [
+                {"name": n, **s, "win_rate": round(s["wins"] / s["games"] * 100) if s["games"] > 0 else 0}
+                for n, s in ranked
+            ],
             "last_game": self._history[-1] if self._history else None,
+            "total_games": len(self._history),
         }
 
 _HELP_TEXT = """

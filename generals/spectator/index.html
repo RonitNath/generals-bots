@@ -270,6 +270,14 @@
     border-radius: 6px;
     padding: 10px 0 6px;
   }
+  .leaderboard-fixed .lb-total {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 6px;
+    padding: 0 8px;
+  }
   .leaderboard h2, .leaderboard-fixed h2 {
     font-size: 11px;
     letter-spacing: 4px;
@@ -383,9 +391,10 @@
 <div class="leaderboard-fixed" id="leaderboardFixed" style="display:none">
   <h2>Leaderboard</h2>
   <table class="lb-table">
-    <thead><tr><th>Agent</th><th>W</th><th>L</th><th>D</th></tr></thead>
+    <thead><tr><th>Agent</th><th>W</th><th>L</th><th>%</th></tr></thead>
     <tbody id="lbBodyFixed"></tbody>
   </table>
+  <div class="lb-total" id="lbTotal"></div>
 </div>
 
 <div class="settings-badge" id="settingsBadge" style="display:none">
@@ -606,7 +615,7 @@ function updateLeaderboard(msg) {
     }).join('');
   }
 
-  // Fixed sidebar leaderboard (compact, no Games column)
+  // Fixed sidebar leaderboard (compact, with win rate)
   if (rankings.length > 0) {
     document.getElementById('leaderboardFixed').style.display = '';
     document.getElementById('lbBodyFixed').innerHTML = rankings.map((r, i) => {
@@ -615,9 +624,10 @@ function updateLeaderboard(msg) {
         <td><span class="lb-rank">${i+1}.</span>${r.name}</td>
         <td class="lb-wins">${r.wins}</td>
         <td class="lb-losses">${r.losses}</td>
-        <td>${r.draws}</td>
+        <td>${r.win_rate || 0}%</td>
       </tr>`;
     }).join('');
+    document.getElementById('lbTotal').textContent = `${msg.total_games || 0} games played`;
   }
 }
 
