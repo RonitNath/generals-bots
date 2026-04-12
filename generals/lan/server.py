@@ -355,6 +355,7 @@ class LANServer:
 
                     if spectator:
                         spectator.game_start(state, [p0_name, p1_name], self.colors, game_num)
+                        spectator.leaderboard(leaderboard.to_dict())
 
                     # Game loop
                     terminated = truncated = False
