@@ -66,9 +66,8 @@ class SpectatorBroadcast:
         self._cached_state: str | None = None
         self._cached_leaderboard: str | None = None
 
-        # Load HTML once
-        html_path = Path(files("generals.spectator")) / "index.html"
-        self._html = html_path.read_bytes()
+        # HTML path — read fresh on each request for cache-busting during dev
+        self._html_path = Path(files("generals.spectator")) / "index.html"
 
         self._start()
 
@@ -97,11 +96,13 @@ class SpectatorBroadcast:
         """Serve HTML for non-WebSocket requests, pass through WebSocket upgrades."""
         if request.headers.get("Upgrade", "").lower() == "websocket":
             return None
+        # Read fresh from disk every request — picks up changes without server restart
+        html = self._html_path.read_bytes()
         return Response(200, "OK", websockets.Headers({
             "Content-Type": "text/html; charset=utf-8",
-            "Content-Length": str(len(self._html)),
+            "Content-Length": str(len(html)),
             "Cache-Control": "no-cache, no-store, must-revalidate",
-        }), self._html)
+        }), html)
 
     async def _ws_handler(self, ws: websockets.ServerConnection):
         self._clients.add(ws)
