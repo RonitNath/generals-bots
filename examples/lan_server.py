@@ -17,7 +17,7 @@ from generals.lan import LANServer
 parser = argparse.ArgumentParser(description="Generals LAN Server")
 parser.add_argument("--host", type=str, default="0.0.0.0", help="Interface to bind on the TV/server machine")
 parser.add_argument("--port", type=int, default=5555)
-parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--seed", type=int, default=None, help="Random seed (default: random per startup)")
 parser.add_argument("--grid", type=int, default=15, help="Grid size (square)")
 parser.add_argument("--truncation", type=int, default=500)
 parser.add_argument("--timeout", type=float, default=2.0, help="Action timeout (seconds)")
@@ -46,4 +46,7 @@ server = LANServer(
     no_spectator=args.no_spectator,
     ctl_port=args.ctl_port,
 )
-server.run(seed=args.seed, num_games=args.games)
+import time
+seed = args.seed if args.seed is not None else int(time.time()) % (2**31)
+print(f"Seed: {seed}")
+server.run(seed=seed, num_games=args.games)
