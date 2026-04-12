@@ -16,6 +16,8 @@ Usage:
     server.run(seed=42)
 """
 
+import json
+import os
 import queue
 import socket
 import sys
@@ -38,6 +40,68 @@ from .protocol import (
 
 # Default player colors (RGB)
 DEFAULT_COLORS = [[220, 56, 56], [56, 120, 220]]
+
+LEADERBOARD_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "leaderboard.json")
+
+
+class Leaderboard:
+    """Persistent win/loss/draw tracker, saved to JSON."""
+
+    def __init__(self, path: str = LEADERBOARD_PATH):
+        self._path = os.path.abspath(path)
+        self._data: dict[str, dict] = {}  # {agent_name: {wins, losses, draws, games}}
+        self._history: list[dict] = []    # recent game results
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path) as f:
+                saved = json.load(f)
+                self._data = saved.get("agents", {})
+                self._history = saved.get("history", [])
+        except (FileNotFoundError, json.JSONDecodeError):
+            self._data = {}
+            self._history = []
+
+    def _save(self):
+        with open(self._path, "w") as f:
+            json.dump({"agents": self._data, "history": self._history}, f, indent=2)
+
+    def _ensure(self, name: str):
+        if name not in self._data:
+            self._data[name] = {"wins": 0, "losses": 0, "draws": 0, "games": 0}
+
+    def record(self, p0_name: str, p1_name: str, winner_name: str | None, turns: int):
+        self._ensure(p0_name)
+        self._ensure(p1_name)
+        if winner_name:
+            loser = p1_name if winner_name == p0_name else p0_name
+            self._data[winner_name]["wins"] += 1
+            self._data[winner_name]["games"] += 1
+            self._data[loser]["losses"] += 1
+            self._data[loser]["games"] += 1
+        else:
+            self._data[p0_name]["draws"] += 1
+            self._data[p0_name]["games"] += 1
+            self._data[p1_name]["draws"] += 1
+            self._data[p1_name]["games"] += 1
+
+        self._history.append({
+            "p0": p0_name, "p1": p1_name,
+            "winner": winner_name, "turns": turns,
+            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        # Keep last 100 games
+        self._history = self._history[-100:]
+        self._save()
+
+    def to_dict(self) -> dict:
+        """Leaderboard sorted by wins desc, for broadcast."""
+        ranked = sorted(self._data.items(), key=lambda x: (-x[1]["wins"], x[1]["losses"]))
+        return {
+            "rankings": [{"name": n, **s} for n, s in ranked],
+            "last_game": self._history[-1] if self._history else None,
+        }
 
 _HELP_TEXT = """
 Commands:
@@ -234,6 +298,7 @@ class LANServer:
         server_ip = self._get_server_ip()
         key = jrandom.PRNGKey(seed)
         game_num = 0
+        leaderboard = Leaderboard()
 
         try:
             # Outer loop: lobby → games → kick → lobby
@@ -241,6 +306,7 @@ class LANServer:
                 if spectator:
                     spectator.set_lobby([], server_ip)
                     spectator.settings(self.fps, self._next_truncation)
+                    spectator.leaderboard(leaderboard.to_dict())
 
                 clients, agent_ids = self._accept_players(srv, spectator, server_ip)
 
@@ -378,6 +444,12 @@ class LANServer:
 
                     if spectator:
                         spectator.game_end(winner_idx, winner_name, turn, game_num, score)
+
+                    # Record to persistent leaderboard (skip kicked games)
+                    if not self._kick:
+                        leaderboard.record(p0_name, p1_name, winner_name, turn)
+                        if spectator:
+                            spectator.leaderboard(leaderboard.to_dict())
 
                     # Handle kicks — close sockets and break to lobby
                     if self._kick:

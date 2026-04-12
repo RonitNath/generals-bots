@@ -64,6 +64,7 @@ class SpectatorBroadcast:
         # Cache for reconnecting browsers
         self._cached_game_start: str | None = None
         self._cached_state: str | None = None
+        self._cached_leaderboard: str | None = None
 
         # Load HTML once
         html_path = Path(files("generals.spectator")) / "index.html"
@@ -105,6 +106,8 @@ class SpectatorBroadcast:
         self._clients.add(ws)
         try:
             # Send cached state on connect (for mid-game reconnects)
+            if self._cached_leaderboard:
+                await ws.send(self._cached_leaderboard)
             if self._cached_game_start:
                 await ws.send(self._cached_game_start)
             if self._cached_state:
@@ -165,6 +168,11 @@ class SpectatorBroadcast:
             "game_num": game_num,
             "score": score,
         })
+        self._broadcast(msg)
+
+    def leaderboard(self, data: dict):
+        msg = json.dumps({"type": "leaderboard", **data})
+        self._cached_leaderboard = msg
         self._broadcast(msg)
 
     def settings(self, fps: int, truncation: int):

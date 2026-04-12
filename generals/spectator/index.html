@@ -254,6 +254,65 @@
   }
   .settings-badge span { color: var(--text); font-weight: 700; }
 
+  /* --- LEADERBOARD --- */
+  .leaderboard {
+    margin-top: 40px;
+    width: 520px;
+  }
+  .leaderboard h2 {
+    font-size: 14px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  .lb-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+  }
+  .lb-table th {
+    color: var(--text-dim);
+    font-weight: 400;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 6px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .lb-table th:not(:first-child) { text-align: center; }
+  .lb-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .lb-table td:not(:first-child) { text-align: center; color: var(--text-dim); }
+  .lb-table td:first-child { font-weight: 700; color: var(--text); }
+  .lb-rank { color: var(--text-dim); font-weight: 400; margin-right: 8px; }
+  .lb-wins { color: #5cb85c !important; font-weight: 700 !important; }
+  .lb-losses { color: #d9534f !important; }
+
+  /* --- LAST WINNER BADGE --- */
+  .last-winner {
+    position: fixed;
+    bottom: 16px;
+    left: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    z-index: 50;
+  }
+  .last-winner .winner-badge-name {
+    font-weight: 700;
+    margin-left: 4px;
+  }
+
   @keyframes slideUp {
     from { transform: translateY(30px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
@@ -273,6 +332,13 @@
   <div class="player-slots">
     <div class="player-slot p0" id="slot0"><span class="pulse">Waiting...</span></div>
     <div class="player-slot p1" id="slot1"><span class="pulse">Waiting...</span></div>
+  </div>
+  <div class="leaderboard" id="leaderboard" style="display:none">
+    <h2>Leaderboard</h2>
+    <table class="lb-table">
+      <thead><tr><th>Agent</th><th>W</th><th>L</th><th>D</th><th>Games</th></tr></thead>
+      <tbody id="lbBody"></tbody>
+    </table>
   </div>
 </div>
 
@@ -315,6 +381,10 @@
     <div class="winner-name" id="winnerName">--</div>
     <div class="winner-stats" id="winnerStats"></div>
   </div>
+</div>
+
+<div class="last-winner" id="lastWinner" style="display:none">
+  PREV <span class="winner-badge-name" id="lastWinnerName">--</span>
 </div>
 
 <div class="settings-badge" id="settingsBadge" style="display:none">
@@ -372,6 +442,7 @@ function handleMessage(msg) {
     case 'game_end': showGameEnd(msg); break;
     case 'countdown': showCountdown(msg); break;
     case 'settings': updateSettings(msg); break;
+    case 'leaderboard': updateLeaderboard(msg); break;
   }
 }
 
@@ -509,6 +580,38 @@ function updateSeriesDisplay() {
   const s0 = seriesScore[a[0]] || 0;
   const s1 = seriesScore[a[1]] || 0;
   el.innerHTML = `<span class="wins" style="color:${rgb(colors[0])}">${s0}</span> - <span class="wins" style="color:${rgb(colors[1])}">${s1}</span>`;
+}
+
+function updateLeaderboard(msg) {
+  const tbody = document.getElementById('lbBody');
+  const rankings = msg.rankings || [];
+  const lastGame = msg.last_game;
+
+  if (rankings.length > 0) {
+    document.getElementById('leaderboard').style.display = '';
+    tbody.innerHTML = rankings.map((r, i) => {
+      return `<tr>
+        <td><span class="lb-rank">${i+1}.</span>${r.name}</td>
+        <td class="lb-wins">${r.wins}</td>
+        <td class="lb-losses">${r.losses}</td>
+        <td>${r.draws}</td>
+        <td>${r.games}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Update last-winner badge
+  const badge = document.getElementById('lastWinner');
+  const nameEl = document.getElementById('lastWinnerName');
+  if (lastGame && lastGame.winner) {
+    nameEl.textContent = lastGame.winner;
+    badge.style.display = '';
+  } else if (lastGame) {
+    nameEl.textContent = 'Draw';
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
 }
 
 function updateSettings(msg) {
