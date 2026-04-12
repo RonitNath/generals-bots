@@ -25,6 +25,7 @@ import threading
 import time
 from collections import Counter
 
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
@@ -346,7 +347,9 @@ class LANServer:
                     self._kick = []
 
                     key, reset_key = jrandom.split(key)
-                    pool, state = self.env.reset(reset_key)
+                    state = self.env.init_state(reset_key)
+                    # Dummy pool — LAN games never auto-reset mid-step
+                    pool = jax.tree.map(lambda x: x[None], state)
 
                     p0_name = agent_ids[assignment[0]]
                     p1_name = agent_ids[assignment[1]]
