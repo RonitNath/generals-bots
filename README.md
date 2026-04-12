@@ -36,6 +36,16 @@ Important entry points:
 - `examples/lan_server.py`
 - `examples/lan_client.py`
 - `examples/custom_agent.py`
+- `examples/run_logged_match.py`
+- `examples/view_keyframe.py`
+
+Documentation:
+
+- [docs/project-overview.md](docs/project-overview.md)
+- [docs/agent-development.md](docs/agent-development.md)
+- [docs/strategy-notes.md](docs/strategy-notes.md)
+- [docs/match-analysis.md](docs/match-analysis.md)
+- [docs/map-diagnostics.md](docs/map-diagnostics.md)
 
 ## Installation
 
@@ -148,6 +158,9 @@ Built-in options:
 
 - `--agent expander`
 - `--agent random`
+- `--agent material`
+- `--agent scout`
+- `--agent backdoor`
 
 Each client receives:
 
@@ -193,6 +206,19 @@ def make_agent(name: str) -> Agent:
 ```
 
 See `examples/custom_agent.py` for a concrete template.
+
+### Stronger Built-In Heuristic Agents
+
+The repo also includes a few stateful rule-based agents intended to be more interesting sparring partners than `random`:
+
+- `MaterialAdvantageAgent`: prioritizes city capture, favorable trades, and land grabs timed before income turns
+- `ScoutPressureAgent`: scouts aggressively into fog early, then pressures the most likely enemy region
+- `BackdoorAgent`: prefers deep incursions and isolated captures inside enemy territory
+
+These are inspired by the strategy themes highlighted in the paper:
+- material advantage and reward shaping around land / army / castles
+- scouting and memory under fog-of-war
+- emergent behaviors such as snowballing and backdooring
 
 ### Run A Custom Agent
 
@@ -267,6 +293,42 @@ Run everything with:
 ```bash
 uv run --extra dev pytest
 ```
+
+For deeper local debugging:
+
+```bash
+uv run python examples/run_logged_match.py --agent-a material --agent-b backdoor --gui
+```
+
+## Match Inspection
+
+For debugging agents and map quality, use the logged match runner:
+
+```bash
+uv run python examples/run_logged_match.py \
+  --agent-a material \
+  --agent-b backdoor \
+  --output logs/material-vs-backdoor \
+  --gui
+```
+
+This produces:
+
+- `metadata.json`: seed, players, and map fairness diagnostics
+- `turns.jsonl`: one record per turn with actions, game stats, anomalies, and agent debug info
+- `summary.json`: winner and total turn count
+
+The fairness report is meant to catch practical issues such as:
+
+- one side having materially easier city access
+- one side having much easier access to the center
+- path-distance territory asymmetry
+
+The turn log is meant to catch agent issues such as:
+
+- passing with a large army
+- attacking cities while behind on army
+- repeated direction flips / oscillation-like behavior
 
 ## Current State Of The Project
 

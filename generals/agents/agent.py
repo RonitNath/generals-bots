@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 import jax.numpy as jnp
 
@@ -28,6 +29,10 @@ class Agent(ABC):
     def reset(self):
         """Reset agent state between episodes."""
         pass
+
+    def get_debug_snapshot(self) -> dict[str, Any] | None:
+        """Optional per-turn debug information for logging and analysis."""
+        return None
 
     def __str__(self):
         return self.id

@@ -237,6 +237,23 @@
     text-align: center;
   }
 
+  .settings-badge {
+    position: fixed;
+    bottom: 16px;
+    right: 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    z-index: 50;
+    display: flex;
+    gap: 16px;
+  }
+  .settings-badge span { color: var(--text); font-weight: 700; }
+
   @keyframes slideUp {
     from { transform: translateY(30px); opacity: 0; }
     to { transform: translateY(0); opacity: 1; }
@@ -300,6 +317,11 @@
   </div>
 </div>
 
+<div class="settings-badge" id="settingsBadge" style="display:none">
+  FPS <span id="settFps">6</span>
+  TRUNC <span id="settTrunc">500</span>
+</div>
+
 <div class="overlay" id="countOverlay">
   <div>
     <div class="countdown-text" id="countNum">5</div>
@@ -349,6 +371,7 @@ function handleMessage(msg) {
     case 'state': updateState(msg); break;
     case 'game_end': showGameEnd(msg); break;
     case 'countdown': showCountdown(msg); break;
+    case 'settings': updateSettings(msg); break;
   }
 }
 
@@ -486,6 +509,12 @@ function updateSeriesDisplay() {
   const s0 = seriesScore[a[0]] || 0;
   const s1 = seriesScore[a[1]] || 0;
   el.innerHTML = `<span class="wins" style="color:${rgb(colors[0])}">${s0}</span> - <span class="wins" style="color:${rgb(colors[1])}">${s1}</span>`;
+}
+
+function updateSettings(msg) {
+  document.getElementById('settFps').textContent = msg.fps;
+  document.getElementById('settTrunc').textContent = msg.truncation;
+  document.getElementById('settingsBadge').style.display = '';
 }
 
 // --- Canvas Rendering ---

@@ -25,6 +25,12 @@ class ReplayGUI:
         >>>     gui.update(state)
         >>>     gui.tick(fps=10)
         >>> gui.close()
+
+    Controls:
+        Right arrow: double speed
+        Left arrow: halve speed
+        Space: pause / resume
+        Q: quit
     """
     
     def __init__(

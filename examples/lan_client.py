@@ -12,10 +12,12 @@ import argparse
 
 from generals.agents import (
     BackdoorAgent,
+    DefenseCounterAgent,
     ExpanderAgent,
     MaterialAdvantageAgent,
     RandomAgent,
     ScoutPressureAgent,
+    SurroundPressureAgent,
     build_agent,
 )
 from generals.lan import LANClient
@@ -23,7 +25,7 @@ from generals.lan import LANClient
 parser = argparse.ArgumentParser(description="Generals LAN Client")
 parser.add_argument("--host", type=str, default="localhost")
 parser.add_argument("--port", type=int, default=5555)
-parser.add_argument("--agent", type=str, default="expander", choices=["expander", "random", "material", "scout", "backdoor"],
+parser.add_argument("--agent", type=str, default="expander", choices=["expander", "random", "material", "scout", "backdoor", "defense", "surround"],
                     help="Built-in agent to use (or replace this script with your own)")
 parser.add_argument(
     "--agent-custom",
@@ -47,6 +49,10 @@ elif args.agent == "scout":
     agent = ScoutPressureAgent(id=args.name or "ScoutPressure")
 elif args.agent == "backdoor":
     agent = BackdoorAgent(id=args.name or "Backdoor")
+elif args.agent == "defense":
+    agent = DefenseCounterAgent(id=args.name or "DefenseCounter")
+elif args.agent == "surround":
+    agent = SurroundPressureAgent(id=args.name or "SurroundPressure")
 
 client = LANClient(agent, host=args.host, port=args.port)
 client.run(seed=args.seed)

@@ -5,12 +5,21 @@ Hosts the game engine. Two clients connect over TCP, each running their
 own agent. A web-based spectator UI is served on a separate port for
 display on a TV or any browser.
 
+CLI commands (type while server is running):
+    fps <N>          Set game speed (ticks per second)
+    truncation <N>   Set max turns for next game
+    end              Force-end the current game (draw)
+    help             Show available commands
+
 Usage:
     server = LANServer(env)
     server.run(seed=42)
 """
 
+import queue
 import socket
+import sys
+import threading
 import time
 from collections import Counter
 
@@ -29,6 +38,14 @@ from .protocol import (
 
 # Default player colors (RGB)
 DEFAULT_COLORS = [[220, 56, 56], [56, 120, 220]]
+
+_HELP_TEXT = """
+Commands:
+  fps <N>          Set game speed (ticks/sec), e.g. 'fps 20'
+  truncation <N>   Set max turns for next game, e.g. 'truncation 300'
+  end              Force-end the current game as a draw
+  help             Show this message
+""".strip()
 
 
 class LANServer:
@@ -63,6 +80,67 @@ class LANServer:
         self.no_spectator = no_spectator
         self.colors = colors or DEFAULT_COLORS
 
+        # Mutable settings changed via CLI commands
+        self._next_truncation = env.truncation
+        self._force_end = False
+        self._cmd_queue: queue.Queue[str] = queue.Queue()
+
+    def _start_cli(self):
+        """Start background thread reading stdin commands."""
+        def _reader():
+            while True:
+                try:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if line:
+                        self._cmd_queue.put(line)
+                except EOFError:
+                    break
+        t = threading.Thread(target=_reader, daemon=True)
+        t.start()
+
+    def _process_commands(self, spectator=None):
+        """Drain command queue, apply changes. Called each tick."""
+        while not self._cmd_queue.empty():
+            try:
+                cmd = self._cmd_queue.get_nowait()
+            except queue.Empty:
+                break
+            parts = cmd.split()
+            verb = parts[0].lower() if parts else ""
+
+            if verb == "fps" and len(parts) >= 2:
+                try:
+                    new_fps = max(1, min(120, int(parts[1])))
+                    self.fps = new_fps
+                    print(f"  >> FPS set to {new_fps}")
+                    if spectator:
+                        spectator.settings(self.fps, self._next_truncation)
+                except ValueError:
+                    print("  >> Usage: fps <number>")
+
+            elif verb == "truncation" and len(parts) >= 2:
+                try:
+                    new_trunc = max(10, int(parts[1]))
+                    self._next_truncation = new_trunc
+                    print(f"  >> Next game truncation set to {new_trunc}")
+                    if spectator:
+                        spectator.settings(self.fps, self._next_truncation)
+                except ValueError:
+                    print("  >> Usage: truncation <number>")
+
+            elif verb == "end":
+                self._force_end = True
+                print("  >> Force-ending current game")
+
+            elif verb == "help":
+                print(_HELP_TEXT)
+
+            else:
+                print(f"  >> Unknown command: {cmd}. Type 'help' for options.")
+
     def _get_server_ip(self) -> str:
         """Best-effort LAN IP for display purposes."""
         try:
@@ -94,11 +172,15 @@ class LANServer:
         srv.bind((self.host, self.port))
         srv.listen(2)
         print(f"LAN Server listening on {self.host}:{self.port}")
+        print(f"Type 'help' for server commands.\n")
+
+        self._start_cli()
 
         server_ip = self._get_server_ip()
 
         if spectator:
             spectator.set_lobby([], server_ip)
+            spectator.settings(self.fps, self._next_truncation)
 
         # Accept two players
         clients, agent_ids = self._accept_players(srv, spectator, server_ip)
@@ -108,11 +190,26 @@ class LANServer:
         assignment = [0, 1]
         match_score: Counter[str] = Counter()
         draws = 0
-        tick_interval = 1.0 / self.fps
 
         try:
             while num_games is None or game_num < num_games:
                 game_num += 1
+
+                # Apply truncation changes between games
+                if self._next_truncation != self.env.truncation:
+                    self.env = GeneralsEnv(
+                        grid_dims=self.env._fixed_dims,
+                        truncation=self._next_truncation,
+                        mountain_density_range=(self.env.mountain_density_range
+                                                if hasattr(self.env, 'mountain_density_range')
+                                                else (0.18, 0.26)),
+                        min_generals_distance=self.env.min_generals_distance,
+                        max_generals_distance=self.env.max_generals_distance,
+                    )
+                    print(f"  >> Env rebuilt with truncation={self._next_truncation}")
+
+                self._force_end = False
+
                 key, reset_key = jrandom.split(key)
                 pool, state = self.env.reset(reset_key)
 
@@ -142,6 +239,12 @@ class LANServer:
 
                 while not (terminated or truncated):
                     tick_start = time.monotonic()
+
+                    # Process CLI commands
+                    self._process_commands(spectator)
+                    if self._force_end:
+                        print(f"  >> Game {game_num} force-ended at turn {turn}")
+                        break
 
                     obs_0 = get_observation(state, 0)
                     obs_1 = get_observation(state, 1)
@@ -175,9 +278,9 @@ class LANServer:
                     truncated = bool(timestep.truncated)
                     turn += 1
 
-                    # Pace to target FPS
+                    # Pace to target FPS (use current fps, may have changed mid-game)
                     elapsed = time.monotonic() - tick_start
-                    remaining = tick_interval - elapsed
+                    remaining = (1.0 / self.fps) - elapsed
                     if remaining > 0:
                         time.sleep(remaining)
 

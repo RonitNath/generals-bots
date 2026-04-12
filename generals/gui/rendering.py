@@ -82,7 +82,7 @@ class Renderer:
         self.render_stats()
         pygame.display.flip()
         if fps:
-            self.properties.clock.tick(fps)
+            self.properties.clock.tick(max(1, int(fps * self.properties.game_speed)))
 
     def render_cell_text(
         self,
@@ -149,9 +149,7 @@ class Renderer:
 
         info_text = {
             "time": f"Time: {str(self.game.time // 2) + ('.' if self.game.time % 2 == 1 else '')}",
-            "speed": "Paused"
-            if self.mode == GuiMode.REPLAY and self.properties.paused
-            else f"Speed: {str(self.properties.game_speed)}x",
+            "speed": "Paused" if self.properties.paused else f"Speed: {str(self.properties.game_speed)}x",
         }
 
         # Write additional info

@@ -167,6 +167,10 @@ class SpectatorBroadcast:
         })
         self._broadcast(msg)
 
+    def settings(self, fps: int, truncation: int):
+        msg = json.dumps({"type": "settings", "fps": fps, "truncation": truncation})
+        self._broadcast(msg)
+
     def countdown(self, seconds: int, next_game: int):
         msg = json.dumps({"type": "countdown", "seconds": seconds, "next_game": next_game})
         self._broadcast(msg)

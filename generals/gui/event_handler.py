@@ -25,15 +25,15 @@ class Keybindings(Enum):
 class Command:
     def __init__(self):
         self.quit: bool = False
+        self.speed_change: float = 1.0
+        self.pause_toggle: bool = False
 
 
 class ReplayCommand(Command):
     def __init__(self):
         super().__init__()
         self.frame_change: int = 0
-        self.speed_change: float = 1.0
         self.restart: bool = False
-        self.pause_toggle: bool = False
 
 
 class GameCommand(Command):
@@ -194,8 +194,15 @@ class TrainEventHandler(EventHandler):
         self._command = TrainCommand()
 
     def handle_key_event(self, event: Event) -> TrainCommand:
-        if event.key == Keybindings.Q.value:
-            self.command.quit = True
+        match event.key:
+            case Keybindings.Q.value:
+                self.command.quit = True
+            case Keybindings.RIGHT.value:
+                self.command.speed_change = 2.0
+            case Keybindings.LEFT.value:
+                self.command.speed_change = 0.5
+            case Keybindings.SPACE.value:
+                self.command.pause_toggle = True
         return self.command
 
     def handle_mouse_event(self) -> None:

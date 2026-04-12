@@ -37,13 +37,25 @@ class GUI:
         command = self.__event_handler.handle_events()
         if command.quit:
             quit()
-        if isinstance(command, ReplayCommand):
-            self.properties.update_speed(command.speed_change)
-            if command.frame_change != 0 or command.restart:
-                self.properties.paused = True
-            if command.pause_toggle:
-                self.properties.paused = not self.properties.paused
+
+        self.properties.update_speed(command.speed_change)
+
+        if isinstance(command, ReplayCommand) and (command.frame_change != 0 or command.restart):
+            self.properties.paused = True
+        if command.pause_toggle:
+            self.properties.paused = not self.properties.paused
+
         self.__renderer.render(fps)
+
+        while self.properties.paused:
+            paused_command = self.__event_handler.handle_events()
+            if paused_command.quit:
+                quit()
+            self.properties.update_speed(paused_command.speed_change)
+            if paused_command.pause_toggle:
+                self.properties.paused = False
+            self.__renderer.render(fps)
+
         return command
 
     def close(self):
